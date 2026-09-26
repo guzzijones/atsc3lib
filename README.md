@@ -14,7 +14,8 @@ Implements, from the A/322 specification:
 - **Per-PLP configuration** decoded from L1-Detail
 - **Data-PLP payload chain**: NUC/QAM demap, bit de-interleave, HTI twisted
   block de-interleave and cell interleaver, LDPC/BCH, descramble to Baseband
-  Packets
+  Packets — for both short-frame (Ninner=16200) and normal-frame
+  (Ninner=64800) codes, all 12 rates and all four NUC modes
 - **Link/network layer**: A/322 5.2.2 Baseband Packet headers, A/330 ALP
   de-encapsulation (single / segmentation / concatenation / signalling),
   IPv4 fragment reassembly and UDP, A/331 Low-Level Signaling
@@ -98,10 +99,11 @@ are surfaced as raw ALP packets rather than decompressed datagrams.
 
 ## Payload limitations
 
-The payload chain supports Ninner = 16200 (short frames) only, and the
-tabulated QPSK/16QAM/64QAM/256QAM MODCODs.  TI mode 2 supports the A/322
-7.1.5.4 twisted block interleaver and the optional A/322 7.1.5.2 **cell**
-interleaver (`L1D_plp_HTI_cell_interleaver`); TI modes 0/1 are supported.
+The payload chain supports both Ninner = 16200 (short frames) and
+Ninner = 64800 (normal frames), and the tabulated QPSK/16QAM/64QAM/256QAM
+MODCODs.  TI mode 2 supports the A/322 7.1.5.4 twisted block interleaver and
+the optional A/322 7.1.5.2 **cell** interleaver
+(`L1D_plp_HTI_cell_interleaver`); TI modes 0/1 are supported.
 
 PLP 0 (64QAM-NUC 11/15) of the RF33 multiplex sits at the ~18.8 dB AWGN
 threshold and the available captures measure ~15.9 dB MER, so it does not

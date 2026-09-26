@@ -30,9 +30,14 @@ MODULATION = {0: 'QPSK', 1: '16QAM', 2: '64QAM', 3: '256QAM',
 L1D_MODULATION = {0: 'QPSK', 1: '16QAM-NUC', 2: '64QAM-NUC', 3: '256QAM-NUC',
                   4: '1024QAM-NUC', 5: '4096QAM-NUC'}
 CODE_RATE = {i: f"{i + 2}/15" for i in range(12)}          # 2/15 .. 13/15
-L1D_FEC_TYPE = {0: 'BCH + 16K LDPC', 1: 'BCH + 64K LDPC',
-                2: 'CRC + 16K LDPC', 3: 'CRC + 64K LDPC', 4: '16K LDPC',
-                5: '64K LDPC', 6: 'No FEC'}
+#: L1D_plp_fec_type code values (A/322 Table 9.8).
+FEC_BCH_16K, FEC_BCH_64K = 0, 1
+FEC_CRC_16K, FEC_CRC_64K = 2, 3
+FEC_16K, FEC_64K = 4, 5
+FEC_NONE = 6
+L1D_FEC_TYPE = {FEC_BCH_16K: 'BCH + 16K LDPC', FEC_BCH_64K: 'BCH + 64K LDPC',
+                FEC_CRC_16K: 'CRC + 16K LDPC', FEC_CRC_64K: 'CRC + 64K LDPC',
+                FEC_16K: '16K LDPC', FEC_64K: '64K LDPC', FEC_NONE: 'No FEC'}
 TI_MODE = {0: 'No time interleaving', 1: 'Convolutional time interleaving',
            2: 'Hybrid time interleaving', 3: 'Reserved'}
 PLP_LAYER = {0: 'Core layer', 1: 'Enhanced layer', 2: 'Reserved',

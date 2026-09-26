@@ -1,107 +1,172 @@
-"""Exact ATSC 3.0 bit interleaver for short FEC frames (N=16200).
+"""Exact ATSC 3.0 bit interleaver (A/322 Section 6.2, short and normal frames).
 
-Implements the A/322 Section 6.3 bit interleaver, which consists of:
+The A/322 Section 6.2 bit interleaver consists of:
 
-1. Parity interleaver (Type B LDPC rates 6/15-13/15 only) - rearranges the
-   LDPC parity section so the decoder sees it in natural order.
-2. Group interleaver - permutes 360-bit groups using the official A/322
-   tables (``data/group_interleaver_B2.json``).
-3. Block interleaver - writes the bits into ``mod`` columns and reads them
-   out row-wise, with a leftover tail (``nr2``/``npart2``) handled specially.
+1. Parity interleaver (Type B LDPC rates only) - rearranges the LDPC parity
+   section so the decoder sees it in natural order.
+2. Group interleaver - permutes 360-bit groups using the A/322 Annex B tables
+   (``data/group_interleaver_B2.json`` for Ninner=16200 and
+   ``data/group_interleaver_64800.json`` for Ninner=64800).
+3. Block interleaver - Type A (``Nr1``/``Nr2`` columns per Table 6.10) or
+   Type B (``NQCB_IG``/``Npart1``/``Npart2`` per Table 6.11).
 
-The tables in ``data/group_interleaver_B2.json`` are keyed by modulation
-(1=QPSK, 2=16QAM, 3=64QAM, 4=256QAM) and code rate (2..13, denominator 15),
-and match the A/322 Annex tables exactly.
+The table values match the A/322 Annex tables exactly.  The 64800 tables are
+extracted by ``tools/extract_bicm.py``; the 16200 tables by
+``tools/extract_bicm_short.py`` (or the equivalent).
 
-Reference: ATSC A/322:2024-04 Physical Layer Protocol, Section 6.3
+Reference: ATSC A/322:2024-04 Physical Layer Protocol, Section 6.2
 """
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Dict, List
 
 import numpy as np
 
-_N = 16200
-_GROUP_SIZE = 360
-_NUM_GROUPS = _N // _GROUP_SIZE  # 45
+from .ldpc_exact import (
+    NINNER_SHORT, NINNER_NORMAL, RATE_DENOM, RATE_MIN, RATE_MAX, GROUP_SIZE,
+    FEC_TYPE_A, FEC_TYPE_B, type_a_params, type_b_qldpc,
+)
+from .nuc import (
+    MODULATION_BITS, QPSK, QAM16, QAM64, QAM256, QAM1024, QAM4096,
+)
 
 _DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
-# Modulation name -> JSON top-level key (only the four tabulated modes).
-_MODULATION_KEYS = {
-    'QPSK': 1,
-    '16QAM': 2,
-    '64QAM': 3,
-    '256QAM': 4,
+#: Block-interleaver type A/B (A/322 Table 6.8/6.9 code value).
+BLOCK_TYPE_A, BLOCK_TYPE_B = 'A', 'B'
+
+
+@dataclass(frozen=True)
+class BlockParams:
+    """Type A/B block-interleaver parameters (A/322 Tables 6.10/6.11).
+
+    Type A uses ``(nr1, nr2, ncols = eta_MOD)`` and leaves the Type B
+    ``npart1``/``npart2`` at 0; Type B uses ``(nqcb_ig = eta_MOD, npart1,
+    npart2)`` and leaves ``nr1``/``nr2`` at 0.  Both rows and columns of the
+    Type B part are derived from ``npart1`` and ``npart2``.
+    """
+    nr1: int
+    nr2: int
+    ncols: int
+    npart1: int
+    npart2: int
+
+
+def _type_a(ninner: int, mod: str, nr1: int, nr2: int) -> BlockParams:
+    return BlockParams(nr1, nr2, MODULATION_BITS[mod], 0, 0)
+
+
+def _type_b(ninner: int, mod: str, npart1: int, npart2: int) -> BlockParams:
+    return BlockParams(0, 0, MODULATION_BITS[mod], npart1, npart2)
+
+
+#: Type A block interleaver (A/322 Table 6.10), keyed (Ninner, modulation).
+TYPE_A_BLOCK: Dict[tuple, BlockParams] = {
+    (NINNER_NORMAL, QPSK):   _type_a(NINNER_NORMAL, QPSK, 32400, 0),
+    (NINNER_NORMAL, QAM16):  _type_a(NINNER_NORMAL, QAM16, 16200, 0),
+    (NINNER_NORMAL, QAM64):  _type_a(NINNER_NORMAL, QAM64, 10800, 0),
+    (NINNER_NORMAL, QAM256): _type_a(NINNER_NORMAL, QAM256, 7920, 180),
+    (NINNER_NORMAL, QAM1024): _type_a(NINNER_NORMAL, QAM1024, 6480, 0),
+    (NINNER_NORMAL, QAM4096): _type_a(NINNER_NORMAL, QAM4096, 5400, 0),
+    (NINNER_SHORT, QPSK):    _type_a(NINNER_SHORT, QPSK, 7920, 180),
+    (NINNER_SHORT, QAM16):   _type_a(NINNER_SHORT, QAM16, 3960, 90),
+    (NINNER_SHORT, QAM64):   _type_a(NINNER_SHORT, QAM64, 2520, 180),
+    (NINNER_SHORT, QAM256):  _type_a(NINNER_SHORT, QAM256, 1800, 225),
 }
 
-# Bits per symbol for the tabulated modes.
-_MODULATION_ORDER = {
-    'QPSK': 2,
-    '16QAM': 4,
-    '64QAM': 6,
-    '256QAM': 8,
+#: Type B block interleaver (A/322 Table 6.11), keyed (Ninner, modulation).
+TYPE_B_BLOCK: Dict[tuple, BlockParams] = {
+    (NINNER_NORMAL, QPSK):   _type_b(NINNER_NORMAL, QPSK, 64800, 0),
+    (NINNER_NORMAL, QAM16):  _type_b(NINNER_NORMAL, QAM16, 64800, 0),
+    (NINNER_NORMAL, QAM64):  _type_b(NINNER_NORMAL, QAM64, 64800, 0),
+    (NINNER_NORMAL, QAM256): _type_b(NINNER_NORMAL, QAM256, 63360, 1440),
+    (NINNER_NORMAL, QAM1024): _type_b(NINNER_NORMAL, QAM1024, 64800, 0),
+    (NINNER_NORMAL, QAM4096): _type_b(NINNER_NORMAL, QAM4096, 64800, 0),
+    (NINNER_SHORT, QPSK):    _type_b(NINNER_SHORT, QPSK, 15840, 360),
+    (NINNER_SHORT, QAM16):   _type_b(NINNER_SHORT, QAM16, 15840, 360),
+    (NINNER_SHORT, QAM64):   _type_b(NINNER_SHORT, QAM64, 15120, 1080),
+    (NINNER_SHORT, QAM256):  _type_b(NINNER_SHORT, QAM256, 14400, 1800),
 }
 
-# (nr2, npart2) for short frames, per A/322 Section 6.3.
-_TAIL_SHORT = {
-    'QPSK': (180, 360),
-    '16QAM': (90, 360),
-    '64QAM': (180, 1080),
-    '256QAM': (225, 1800),
+#: Block interleaver type per (modulation, rate) for normal frames; the rest
+#: are Type A (A/322 Table 6.8).  Type A FEC does not imply Type A block.
+_BI_TYPE_B_64800 = {
+    (QAM16, 5), (QAM16, 8), (QAM16, 9),
+    (QAM64, 7), (QAM64, 9), (QAM64, 10), (QAM64, 13),
+    (QAM256, 5), (QAM256, 6), (QAM256, 7), (QAM256, 8),
+    (QAM256, 10), (QAM256, 11), (QAM256, 13),
+    (QAM1024, 5), (QAM1024, 7), (QAM1024, 9), (QAM1024, 10),
+    (QAM1024, 11),
+    (QAM4096, 7),
 }
 
-# Block interleaver type for each (rate, modulation) at N=16200.
-# Derived from A/322 Section 6.3 and cross-checked against the reference
-# implementation (drmpeg/gr-atsc3, interleaver_bb_impl.cc).
-_BLOCK_TYPE = {
-    6:  {'QPSK': 'B', '16QAM': 'B', '64QAM': 'B', '256QAM': 'B'},
-    7:  {'QPSK': 'B', '16QAM': 'B', '64QAM': 'B', '256QAM': 'A'},
-    8:  {'QPSK': 'A', '16QAM': 'A', '64QAM': 'A', '256QAM': 'A'},
-    9:  {'QPSK': 'B', '16QAM': 'B', '64QAM': 'B', '256QAM': 'A'},
-    10: {'QPSK': 'A', '16QAM': 'A', '64QAM': 'A', '256QAM': 'A'},
-    11: {'QPSK': 'A', '16QAM': 'B', '64QAM': 'A', '256QAM': 'B'},
-    12: {'QPSK': 'A', '16QAM': 'A', '64QAM': 'A', '256QAM': 'A'},
-    13: {'QPSK': 'A', '16QAM': 'B', '64QAM': 'A', '256QAM': 'A'},
+#: Block interleaver type per (modulation, rate) for short frames; the rest
+#: are Type A (A/322 Table 6.9).
+_BI_TYPE_B_16200 = {
+    (QPSK, 6), (QPSK, 7), (QPSK, 9),
+    (QAM16, 6), (QAM16, 7), (QAM16, 9), (QAM16, 11), (QAM16, 13),
+    (QAM64, 6), (QAM64, 7), (QAM64, 9),
+    (QAM256, 6), (QAM256, 11),
 }
 
-# Type B parity-interleaver lifting factor Qldpc for short frames.
-_TYPE_B_QLDPC = {6: 27, 7: 24, 8: 21, 9: 18, 10: 15, 11: 12, 12: 9, 13: 6}
+#: Group-table file name per frame length (A/322 Annex B.1/B.2).
+_GROUP_FILES = {
+    NINNER_SHORT: 'group_interleaver_B2.json',
+    NINNER_NORMAL: 'group_interleaver_64800.json',
+}
 
 
-def _load_group_tables() -> Dict[int, Dict[int, List[int]]]:
-    with open(os.path.join(_DATA_DIR, 'group_interleaver_B2.json')) as f:
+#: Modulation name -> JSON key in the short-frame group table file, which
+#: numbers modulations 1..4 (A/322 Annex B.2 order).
+_MODULATION_TABLE_KEY = {
+    QPSK: 1, QAM16: 2, QAM64: 3, QAM256: 4,
+    QAM1024: 5, QAM4096: 6,
+}
+
+#: Data-PLP modulations the receive chain demaps (A/322 Annex C bank).
+SUPPORTED_MODULATIONS = (QPSK, QAM16, QAM64, QAM256)
+
+
+def _load_group_tables(path: str) -> Dict:
+    """Load a group-wise table file, keyed by modulation name and rate.
+
+    The short-frame file keys modulations by number (A/322 Annex B.2 order,
+    1..4); the normal-frame file keys them by name.  Normalise to the name.
+    """
+    with open(os.path.join(_DATA_DIR, path)) as f:
         raw = json.load(f)
-    return {
-        int(mod): {int(rate): perm for rate, perm in table.items()}
-        for mod, table in raw.items()
-    }
+    if 'tables' in raw:
+        raw = raw['tables']
+    by_number = {v: k for k, v in _MODULATION_TABLE_KEY.items()}
+    out = {}
+    for mod, table in raw.items():
+        name = by_number[int(mod)] if mod.isdigit() else mod
+        out[name] = {int(rate): perm for rate, perm in table.items()}
+    return out
 
 
-_GROUP_TABLES = _load_group_tables()
+_GROUP_TABLES = {
+    n: _load_group_tables(path) for n, path in _GROUP_FILES.items()
+}
 
 
-def _modulation_key(modulation: str) -> int:
-    if modulation not in _MODULATION_KEYS:
-        raise NotImplementedError(
-            f"No A/322 group interleaver table for modulation {modulation!r}; "
-            f"supported: {sorted(_MODULATION_KEYS)}"
-        )
-    return _MODULATION_KEYS[modulation]
+def _bi_type(n: int) -> set:
+    return _BI_TYPE_B_64800 if n == NINNER_NORMAL else _BI_TYPE_B_16200
 
 
 def _bits_per_symbol(modulation: str) -> int:
-    if modulation not in _MODULATION_ORDER:
+    if modulation not in SUPPORTED_MODULATIONS:
         raise NotImplementedError(
             f"No A/322 bit interleaver for modulation {modulation!r}; "
-            f"supported: {sorted(_MODULATION_ORDER)}"
+            f"supported: {list(SUPPORTED_MODULATIONS)}"
         )
-    return _MODULATION_ORDER[modulation]
+    return MODULATION_BITS[modulation]
 
 
 class GroupInterleaver:
-    """ATSC 3.0 bit interleaver for short frames (N=16200).
+    """ATSC 3.0 bit interleaver for short and normal frames.
 
     The transmitter-side permutation is built once and cached as
     ``self.order``: the on-air bit at position ``i`` equals the LDPC
@@ -111,36 +176,43 @@ class GroupInterleaver:
     Args:
         rate: LDPC code rate numerator (2..13, denominator 15).
         modulation: One of QPSK, 16QAM, 64QAM, 256QAM.
-        n: Codeword length (only 16200 supported).
+        n: Codeword length (16200 short frames, 64800 normal frames).
     """
 
-    def __init__(self, rate: int, modulation: str = 'QPSK', n: int = 16200):
-        if n != _N:
-            raise ValueError(f"Only N=16200 (short frames) supported, got {n}")
-        if rate not in range(2, 14):
-            raise ValueError(f"Rate {rate}/15 not supported (use 2-13)")
+    def __init__(self, rate: int, modulation: str = QPSK,
+                 n: int = NINNER_SHORT):
+        if n not in _GROUP_FILES:
+            raise ValueError(f"Only N in {tuple(_GROUP_FILES)} supported, "
+                             f"got {n}")
+        if not RATE_MIN <= rate <= RATE_MAX:
+            raise ValueError(f"Rate {rate}/15 not supported "
+                             f"(use {RATE_MIN}-{RATE_MAX})")
 
         self.rate = rate
         self.modulation = modulation
         self.n = n
         self.mod = _bits_per_symbol(modulation)
-        self.K = n * rate // 15
+        self.K = n * rate // RATE_DENOM
         self.M = n - self.K
-        self.ldpc_type = 'A' if rate in (2, 3, 4, 5) else 'B'
-        self.q_val = _TYPE_B_QLDPC.get(rate)
-        # Type A LDPC rates always use block type A; Type B rates vary.
-        self.block_type = 'A' if self.ldpc_type == 'A' else _BLOCK_TYPE[rate][modulation]
+        self.ldpc_type = FEC_TYPE_A if rate in type_a_params(n) else FEC_TYPE_B
+        self.q_val = type_b_qldpc(n).get(rate)
+        self.n_group = n // GROUP_SIZE
+        # Table 6.8/6.9: Type A FEC does not imply Type A block interleaving.
+        self.block_type = (BLOCK_TYPE_B if (modulation, rate) in _bi_type(n)
+                           else BLOCK_TYPE_A)
+        self.block = (TYPE_A_BLOCK if self.block_type == BLOCK_TYPE_A
+                      else TYPE_B_BLOCK)[(n, modulation)]
 
-        mod_key = _modulation_key(modulation)
         try:
-            self.group_table = _GROUP_TABLES[mod_key][rate]
+            self.group_table = _GROUP_TABLES[n][modulation][rate]
         except KeyError as exc:
             raise NotImplementedError(
-                f"No group table for {modulation} rate {rate}/15"
+                f"No A/322 group table for modulation {modulation} rate "
+                f"{rate}/15 at Ninner={n}"
             ) from exc
-        if len(self.group_table) != _NUM_GROUPS:
+        if len(self.group_table) != self.n_group:
             raise ValueError(
-                f"Group table length {len(self.group_table)} != {_NUM_GROUPS}"
+                f"Group table length {len(self.group_table)} != {self.n_group}"
             )
 
         self.order = self._build_order()
@@ -153,43 +225,42 @@ class GroupInterleaver:
         src = np.arange(self.n, dtype=np.int64)
 
         # Step 1: parity interleaver (Type B only).
-        if self.ldpc_type == 'B':
+        if self.ldpc_type == FEC_TYPE_B:
             q = self.q_val
             tempu = np.empty(self.n, dtype=np.int64)
             tempu[:self.K] = src[:self.K]
             parity = src[self.K:]
             for t in range(q):
-                for s in range(360):
-                    tempu[self.K + 360 * t + s] = parity[q * s + t]
+                for s in range(GROUP_SIZE):
+                    tempu[self.K + GROUP_SIZE * t + s] = parity[q * s + t]
         else:
             tempu = src
 
         # Step 2: group interleaver.
         tempv = np.concatenate([
-            tempu[g * _GROUP_SIZE:(g + 1) * _GROUP_SIZE]
+            tempu[g * GROUP_SIZE:(g + 1) * GROUP_SIZE]
             for g in self.group_table
         ])
 
         # Step 3: block interleaver.
-        if self.block_type == 'A':
+        if self.block_type == BLOCK_TYPE_A:
             return self._block_interleave_type_a(tempv)
         return self._block_interleave_type_b(tempv)
 
     def _block_interleave_type_a(self, tempv: np.ndarray) -> np.ndarray:
+        """A/322 6.2.3.1: write column-wise, read row-wise (Part 1 then 2)."""
         mod = self.mod
-        nr2, _ = _TAIL_SHORT[self.modulation]
-        packed = self.n // mod
-        rows = packed - nr2
+        nr1, nr2 = self.block.nr1, self.block.nr2
 
         out = np.empty(self.n, dtype=np.int64)
-        cols = [tempv[i * rows:(i + 1) * rows] for i in range(mod)]
+        cols = [tempv[i * nr1:(i + 1) * nr1] for i in range(mod)]
         idx = 0
-        for j in range(rows):
+        for j in range(nr1):
             for k in range(mod):
                 out[idx] = cols[k][j]
                 idx += 1
         if nr2:
-            rows2 = rows * mod
+            rows2 = nr1 * mod
             tail_cols = [
                 tempv[rows2 + i * nr2:rows2 + (i + 1) * nr2] for i in range(mod)
             ]
@@ -200,18 +271,19 @@ class GroupInterleaver:
         return out
 
     def _block_interleave_type_b(self, tempv: np.ndarray) -> np.ndarray:
+        """A/322 6.2.3.2: 360-column row-write / column-read over Npart1."""
         mod = self.mod
-        _, npart2 = _TAIL_SHORT[self.modulation]
-        outer = self.n // (360 * mod)
-        inner = 360 * mod
+        npart1, npart2 = self.block.npart1, self.block.npart2
+        outer = npart1 // (GROUP_SIZE * mod)
+        inner = GROUP_SIZE * mod
 
         out = np.empty(self.n, dtype=np.int64)
         idx = 0
         for nn in range(outer):
             indexn = nn * inner
-            for _ in range(360):
+            for _ in range(GROUP_SIZE):
                 for k in range(mod):
-                    out[idx] = tempv[indexn + 360 * k]
+                    out[idx] = tempv[indexn + GROUP_SIZE * k]
                     idx += 1
                 indexn += 1
         if npart2:
@@ -239,6 +311,7 @@ class GroupInterleaver:
 
 
 def deinterleave_llrs(llrs: np.ndarray, rate: int,
-                      modulation: str = 'QPSK') -> np.ndarray:
+                      modulation: str = QPSK,
+                      n: int = NINNER_SHORT) -> np.ndarray:
     """Convenience function: deinterleave LLRs for a given MODCOD."""
-    return GroupInterleaver(rate, modulation).deinterleave_llrs(llrs)
+    return GroupInterleaver(rate, modulation, n=n).deinterleave_llrs(llrs)

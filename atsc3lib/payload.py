@@ -27,10 +27,14 @@ import numpy as np
 
 from . import nuc
 from . import spec
+from . import l1_signaling
 from .bch import BCHCode
 from .frequency_interleaver import deinterleave as fi_deinterleave
 from .group_interleaver import GroupInterleaver
-from .ldpc_exact import ATSC3LDPCExact
+from .ldpc_exact import (
+    ATSC3LDPCExact, NINNER_SHORT, NINNER_NORMAL, RATE_MIN,
+)
+from .nuc import MODULATION_BITS, QPSK
 from .pilot_reference import reference_sequence
 from .signaling_fec import scramble_bits
 from .cell_interleaver import CellInterleaver
@@ -143,15 +147,21 @@ class FecBlock:
         return self.converged and self.bch_ok
 
 
-#: L1D_plp_mod signalling value -> group-interleaver modulation name.
-MOD_NAME = {0: 'QPSK', 1: '16QAM', 2: '64QAM', 3: '256QAM'}
+#: L1D_plp_mod signalling value -> modulation name, restricted to the four
+#: NUC modes the receive chain supports (A/322 Table 9.8).
+MOD_NAME = {code: name for code, name in nuc.MOD_NAME.items()
+            if name in MODULATION_BITS}
+
+#: BCH correctable errors (A/322 6.1.2.1 / Table 6.3).
+BCH_T = 12
 
 
 class DataPlpChain:
-    """Receive chain for one data PLP FEC block (Ninner=16200).
+    """Receive chain for one data PLP FEC block.
 
     Supports every QPSK/16QAM/64QAM/256QAM code rate tabulated in A/322
-    Annex B for short frames.  The chain is::
+    Annexes A and B, at both frame lengths (Ninner=16200 short frames and
+    Ninner=64800 normal frames).  The chain is::
 
         cells -> NUC/QAM demap (Annex C, 6.3.3)
               -> bit de-interleave (6.2, Annex B)
@@ -159,28 +169,31 @@ class DataPlpChain:
               -> Baseband Packet
     """
 
-    #: The oracle's normalized-min-sum ladder.  alpha=0.75 suits the 16200
+    #: The oracle's normalized-min-sum ladder.  alpha=0.75 suits the short
     #: codes' check degrees and is the fallback; 1.0/0.85 are tried first.
     ALPHA_LADDER = (1.0, 0.85, 0.75)
 
-    def __init__(self, mod: str = 'QPSK', rate: int = 2,
-                 ninner: int = 16200, max_iterations: int = 100):
-        if ninner != 16200:
-            raise NotImplementedError("only Ninner=16200 is implemented")
+    def __init__(self, mod: str = QPSK, rate: int = RATE_MIN,
+                 ninner: int = NINNER_SHORT, max_iterations: int = 100):
+        if ninner not in (NINNER_SHORT, NINNER_NORMAL):
+            raise NotImplementedError(
+                f"only Ninner in ({NINNER_SHORT}, {NINNER_NORMAL}) is "
+                f"implemented (got {ninner})")
         if mod not in MOD_NAME.values():
             raise NotImplementedError(f"modulation {mod!r} not supported")
         self.ninner = ninner
         self.rate = rate
         self.mod = mod
-        self.mod_bits = nuc.MOD_ORDER[{v: k for k, v in MOD_NAME.items()}[mod]]
-        self.bch = BCHCode(ninner, 12)
-        self.ldpc = ATSC3LDPCExact(rate, max_iterations=max_iterations)
+        self.mod_bits = MODULATION_BITS[mod]
+        self.bch = BCHCode(ninner, BCH_T)
+        self.ldpc = ATSC3LDPCExact(rate, n=ninner, max_iterations=max_iterations)
         self.Kldpc = self.ldpc.K
-        self.Mouter = 168 if ninner == 16200 else 192
+        self.Mouter = self.bch.mouter
         self.kpayload = self.Kldpc - self.Mouter
-        self.gi = GroupInterleaver(rate, mod)
+        self.gi = GroupInterleaver(rate, mod, n=ninner)
         self.order = np.asarray(self.gi.order)
-        #: Data cells consumed by one FEC block at this modulation.
+        #: Data cells consumed by one FEC block at this modulation
+        #: (A/322 Table 6.14).
         self.cells_per_fec = ninner // self.mod_bits
 
     def decode_cells(self, cells: np.ndarray, alpha: float = None) -> FecBlock:
@@ -210,11 +223,14 @@ class DataPlpChain:
 class QPSKPlpChain(DataPlpChain):
     """Receive chain for a QPSK 2/15 PLP (the RF33 PLP-16 case)."""
 
-    def __init__(self, ninner: int = 16200, rate: int = 2,
+    #: Fixed MODCOD: QPSK, rate 2/15 (A/322 Table 6.12).
+    QPSK_RATE = 2
+
+    def __init__(self, ninner: int = NINNER_SHORT, rate: int = QPSK_RATE,
                  max_iterations: int = 100):
-        if rate != 2:
+        if rate != self.QPSK_RATE:
             raise NotImplementedError("only QPSK 2/15 is implemented so far")
-        super().__init__(mod='QPSK', rate=rate, ninner=ninner,
+        super().__init__(mod=QPSK, rate=rate, ninner=ninner,
                          max_iterations=max_iterations)
 
 
@@ -329,13 +345,25 @@ def decode_subframe0_qpsk_plp(y: np.ndarray, t0: int, fft_size: int,
                            preamble_structure=preamble_structure,
                            l1_cells=l1_cells)
     chain = QPSKPlpChain(max_iterations=max_iterations)
-    cells_per_block = chain.ninner // 2          # QPSK: 8100 cells/block
+    #: QPSK: 2 bits per cell (A/322 Table 6.14).
+    cells_per_block = chain.ninner // MODULATION_BITS[QPSK]
     n_fec = plp_size // cells_per_block
     blocks = []
     for j in range(n_fec):
         lo = plp_start + j * cells_per_block
         blocks.append(chain.decode_cells(pool.cells[lo:lo + cells_per_block]))
     return PlpPayload(plp_id=plp_id, fec_blocks=blocks, n_fec=n_fec)
+
+
+#: L1D_plp_fec_type -> LDPC codeword length (A/322 Table 9.8).
+PLP_NINNER = {
+    l1_signaling.FEC_BCH_16K: NINNER_SHORT,
+    l1_signaling.FEC_BCH_64K: NINNER_NORMAL,
+    l1_signaling.FEC_CRC_16K: NINNER_SHORT,
+    l1_signaling.FEC_CRC_64K: NINNER_NORMAL,
+    l1_signaling.FEC_16K: NINNER_SHORT,
+    l1_signaling.FEC_64K: NINNER_NORMAL,
+}
 
 
 def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
@@ -346,9 +374,9 @@ def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
                          pattern: str = None, sbs_null: int = None) -> PlpPayload:
     """Decode one PLP of subframe 0 from its L1-Detail ``plp`` config.
 
-    Handles any tabulated QPSK/16QAM/64QAM/256QAM rate, the HTI twisted block
-    interleaver (TI mode 2) and (for the RF33 PLP-0 shape) the multi-FEC-block
-    geometry.
+    Handles any tabulated QPSK/16QAM/64QAM/256QAM rate at either frame length
+    (A/322 Table 9.8 ``fec_type``), the HTI twisted block interleaver (TI mode
+    2) and (for the RF33 PLP-0 shape) the multi-FEC-block geometry.
     """
     pool = build_cell_pool(y, t0, fft_size, guard_interval, noc, dx, dy,
                            n_data_symbols, sbs_symbols=sbs_symbols,
@@ -362,17 +390,21 @@ def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
     if mod is None:
         raise NotImplementedError(
             f"modulation index {plp.modulation} not tabulated for data PLPs")
+    ninner = PLP_NINNER.get(plp.fec_type)
+    if ninner is None:
+        raise NotImplementedError(
+            f"fec_type {plp.fec_type} not tabulated for data PLPs")
     nti = (plp.hti_num_ti_blocks + 1) if plp.ti_mode == 2 else 1
     cell_inter = plp.hti_cell_interleaver or 0
-    payload = decode_data_plp(cells, mod, plp.code_rate + 2, nti=nti,
-                              cell_interleaver=cell_inter,
+    payload = decode_data_plp(cells, mod, RATE_MIN + plp.code_rate, ninner=ninner,
+                              nti=nti, cell_interleaver=cell_inter,
                               max_iterations=max_iterations)
     payload.plp_id = plp.plp_id
     return payload
 
 
-def decode_data_plp(cells: np.ndarray, mod: str, rate: int, nti: int = 1,
-                    n_fec: int = None, cell_interleaver: int = 0,
+def decode_data_plp(cells: np.ndarray, mod: str, rate: int, ninner: int = NINNER_SHORT,
+                    nti: int = 1, n_fec: int = None, cell_interleaver: int = 0,
                     max_iterations: int = 100) -> PlpPayload:
     """Decode a data PLP from its cell slice, honouring the HTI interleaver.
 
@@ -386,13 +418,15 @@ def decode_data_plp(cells: np.ndarray, mod: str, rate: int, nti: int = 1,
 
     Args:
         cells: PLP cells in cell order.
-        mod: 'QPSK', '16QAM', '64QAM' or '256QAM'.
+        mod: QPSK, 16QAM, 64QAM or 256QAM (nuc.MOD_NAME).
         rate: LDPC code rate numerator over 15.
+        ninner: LDPC codeword length (16200 or 64800).
         nti: Number of TI blocks (1 for no sub-frame division).
         n_fec: Total FEC blocks; derived from ``cells`` if omitted.
         cell_interleaver: A/322 7.1.5.2 HTI cell interleaver flag.
     """
-    chain = DataPlpChain(mod=mod, rate=rate, max_iterations=max_iterations)
+    chain = DataPlpChain(mod=mod, rate=rate, ninner=ninner,
+                         max_iterations=max_iterations)
     cpf = chain.cells_per_fec
     plp_id = -1
     if n_fec is None:

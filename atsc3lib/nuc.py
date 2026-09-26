@@ -40,6 +40,20 @@ MOD_NAME: Dict[int, str] = {
     4: '1024QAM', 5: '4096QAM',
 }
 
+#: Named modulation identifiers (A/322 Table 9.8 names).
+QPSK, QAM16, QAM64, QAM256 = 'QPSK', '16QAM', '64QAM', '256QAM'
+QAM1024, QAM4096 = '1024QAM', '4096QAM'
+
+#: Modulation name -> bits per symbol eta_MOD (A/322 Table 6.14).
+MODULATION_BITS: Dict[str, int] = {
+    name: MOD_ORDER[code] for code, name in MOD_NAME.items()
+}
+
+#: Modulation name -> L1D_plp_mod signalling value (A/322 Table 9.8).
+MODULATION_VALUE: Dict[str, int] = {
+    name: code for code, name in MOD_NAME.items()
+}
+
 # table tag per NUC order (Annex C): 16 -> C.1.2/C.1.3, 64 -> C.1.4/C.1.5,
 # 256 -> C.1.6/C.1.7.  Rates 2..7 and 8..13 use different tables.
 _TABLE = {16: ('C.1.2', 'C.1.3'), 64: ('C.1.4', 'C.1.5'),
