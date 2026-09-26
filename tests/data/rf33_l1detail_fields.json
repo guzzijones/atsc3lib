@@ -1,0 +1,372 @@
+[
+ {
+  "path": "",
+  "name": "L1D_version",
+  "value": 1
+ },
+ {
+  "path": "",
+  "name": "L1D_num_rf",
+  "value": 0
+ },
+ {
+  "path": "",
+  "name": "L1D_time_sec",
+  "value": 1790377009
+ },
+ {
+  "path": "",
+  "name": "L1D_time_msec",
+  "value": 608
+ },
+ {
+  "path": "",
+  "name": "L1D_time_usec",
+  "value": 154
+ },
+ {
+  "path": "",
+  "name": "L1D_time_nsec",
+  "value": 134
+ },
+ {
+  "path": "i=0/",
+  "name": "L1D_subframe_multiplex",
+  "value": 0
+ },
+ {
+  "path": "i=0/",
+  "name": "L1D_frequency_interleaver",
+  "value": 1
+ },
+ {
+  "path": "i=0/",
+  "name": "L1D_sbs_null_cells",
+  "value": 127
+ },
+ {
+  "path": "i=0/",
+  "name": "L1D_num_plp",
+  "value": 1
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_id",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_lls_flag",
+  "value": 1
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_layer",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_start",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_size",
+  "value": 199800
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_scrambler_type",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_fec_type",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_mod",
+  "value": 2
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_cod",
+  "value": 9
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_TI_mode",
+  "value": 2
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_type",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_HTI_inter_subframe",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_HTI_num_ti_blocks",
+  "value": 1
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_HTI_num_fec_blocks_max",
+  "value": 73
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_HTI_num_fec_blocks",
+  "value": 73
+ },
+ {
+  "path": "i=0/j=0/",
+  "name": "L1D_plp_HTI_cell_interleaver",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_id",
+  "value": 16
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_lls_flag",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_layer",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_start",
+  "value": 199800
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_size",
+  "value": 8100
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_scrambler_type",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_fec_type",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_mod",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_cod",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_TI_mode",
+  "value": 2
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_type",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_TI_extended_interleaving",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_HTI_inter_subframe",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_HTI_num_ti_blocks",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_HTI_num_fec_blocks_max",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_HTI_num_fec_blocks",
+  "value": 0
+ },
+ {
+  "path": "i=0/j=1/",
+  "name": "L1D_plp_HTI_cell_interleaver",
+  "value": 0
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_mimo",
+  "value": 0
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_miso",
+  "value": 0
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_fft_size",
+  "value": 1
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_reduced_carriers",
+  "value": 0
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_guard_interval",
+  "value": 6
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_num_ofdm_symbols",
+  "value": 74
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_scattered_pilot_pattern",
+  "value": 3
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_scattered_pilot_boost",
+  "value": 1
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_sbs_first",
+  "value": 1
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_sbs_last",
+  "value": 1
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_subframe_multiplex",
+  "value": 0
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_frequency_interleaver",
+  "value": 1
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_sbs_null_cells",
+  "value": 1609
+ },
+ {
+  "path": "i=1/",
+  "name": "L1D_num_plp",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_id",
+  "value": 1
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_lls_flag",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_layer",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_start",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_size",
+  "value": 947700
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_scrambler_type",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_fec_type",
+  "value": 1
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_mod",
+  "value": 3
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_cod",
+  "value": 9
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_TI_mode",
+  "value": 2
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_type",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_HTI_inter_subframe",
+  "value": 0
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_HTI_num_ti_blocks",
+  "value": 2
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_HTI_num_fec_blocks_max",
+  "value": 116
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_HTI_num_fec_blocks",
+  "value": 116
+ },
+ {
+  "path": "i=1/j=0/",
+  "name": "L1D_plp_HTI_cell_interleaver",
+  "value": 0
+ },
+ {
+  "path": "",
+  "name": "L1D_bsid",
+  "value": 540
+ }
+]
