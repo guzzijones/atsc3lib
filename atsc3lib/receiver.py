@@ -88,7 +88,7 @@ def decode_signaling(iq_main: np.ndarray, fs_main: float,
     try:
         symbol, structure, start = _bootstrap_to_preamble(iq_main, fs_main)
     except Exception as exc:  # noqa: BLE001 - report, do not crash the caller
-        return ReceiverResult(structure=-1, l1_basic=None, l1_basic_ok=False,
+        return ReceiverResult(preamble_structure=-1, l1_basic=None, l1_basic_ok=False,
                               l1_detail=None, l1_detail_ok=False,
                               bootstrap_start=-1, frame_start=-1,
                               error=f"bootstrap/preamble: {exc}")
@@ -100,7 +100,7 @@ def decode_signaling(iq_main: np.ndarray, fs_main: float,
     lb_codec = L1BasicCodec(params.l1b_mode, max_iterations=max_iterations)
     lb_bits, lb_ok = lb_codec.decode_cells(cells[:lb_codec.n_cells])
     if not (lb_ok and crc32_ok(lb_bits)):
-        return ReceiverResult(structure=structure, l1_basic=None,
+        return ReceiverResult(preamble_structure=structure, l1_basic=None,
                               l1_basic_ok=False, l1_detail=None,
                               l1_detail_ok=False, bootstrap_start=start,
                               frame_start=start,
@@ -115,14 +115,14 @@ def decode_signaling(iq_main: np.ndarray, fs_main: float,
     ld_bits, bch_ok, ld_crc_ok = ld_codec.decode_cells(
         cells[lo:lo + ld_codec.n_cells])
     if not (bch_ok and ld_crc_ok):
-        return ReceiverResult(structure=structure, l1_basic=l1b,
+        return ReceiverResult(preamble_structure=structure, l1_basic=l1b,
                               l1_basic_ok=True, l1_detail=None,
                               l1_detail_ok=False, bootstrap_start=start,
                               frame_start=start,
                               error="L1-Detail did not verify")
     l1d = parse_l1_detail(ld_bits, l1b)
 
-    return ReceiverResult(structure=structure, l1_basic=l1b, l1_basic_ok=True,
+    return ReceiverResult(preamble_structure=structure, l1_basic=l1b, l1_basic_ok=True,
                           l1_detail=l1d, l1_detail_ok=True,
                           bootstrap_start=start, frame_start=start)
 
