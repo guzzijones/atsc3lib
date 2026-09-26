@@ -401,34 +401,37 @@ SP_DXDY = {
     'SP24_2': (24, 2), 'SP24_4': (24, 4), 'SP32_2': (32, 2), 'SP32_4': (32, 4),
 }
 
-# Additional continual pilots (A/322 Table D.1.4) for the 8K patterns used by
-# RF33-class multiplexes.  Values are relative carrier indices; indices listed
-# in parentheses in the table are not used when cred_coeff is odd.
-ADDITIONAL_CP_8K = {
-    'SP3_2': (1731,), 'SP3_4': (1731,), 'SP4_2': (1732,), 'SP4_4': (1732,),
-    'SP6_2': (1734,), 'SP6_4': (1734,), 'SP8_2': (1744,), 'SP8_4': (1744,),
-    'SP12_2': (1740,), 'SP12_4': (1740,), 'SP16_2': (1744,), 'SP16_4': (1744,),
-    'SP24_2': (), 'SP24_4': (), 'SP32_2': (), 'SP32_4': (),
-}
+# Additional continual pilots, available data cells and subframe-boundary-symbol
+# geometry are per (FFT size, pilot pattern, cred_coeff) and live in
+# ``atsc3lib.pilot_tables`` (fetched from the pinned independent transcription
+# and gated by the constant-data-carrier identity).  These helpers expose them.
 
-# Available data cells per DATA symbol (A/322 Table 7.3/7.4) for 8K, cred 0.
-AVAIL_DATA_8K = {
-    'SP3_2': 5711, 'SP3_4': 6285, 'SP4_2': 5999, 'SP4_4': 6429,
-    'SP6_2': 6287, 'SP6_4': 6573, 'SP8_2': 6431, 'SP8_4': 6645,
-    'SP12_2': 6575, 'SP12_4': 6717, 'SP16_2': 6647, 'SP16_4': 6753,
-    'SP24_2': 6719, 'SP24_4': 6789, 'SP32_2': 6755, 'SP32_4': 6807,
-}
-
-# Subframe boundary symbol geometry (A/322 Tables 7.5/7.6 total, Annex F
-# active) for 8K, cred 0, one subframe boundary symbol per subframe.
+#: The RF33-class geometry (8K, cred 0, SP4_2) as named constants for the
+#: subframe-0 path and its tests.
+RF33_PATTERN = 'SP4_2'
+RF33_FFT = 8192
+RF33_CRED = 0
 SBS_TOTAL_8K_CRED0 = 5136      # Table 7.5/7.6
 SBS_ACTIVE_8K_CRED0 = 5009     # Annex F (available for cell multiplexing)
 SBS_NULL_8K_CRED0 = SBS_TOTAL_8K_CRED0 - SBS_ACTIVE_8K_CRED0  # 127
 
 
-def additional_cp(pattern: str) -> tuple:
-    """Additional continual pilot indices for an 8K scattered pilot pattern."""
-    return ADDITIONAL_CP_8K.get(pattern, ())
+def additional_cp(pattern: str, fft_size: int = RF33_FFT,
+                  cred_coeff: int = RF33_CRED) -> tuple:
+    """Additional continual pilots, relative indices (A/322 Table D.1.4/D.1.5)."""
+    from . import pilot_tables
+    return pilot_tables.additional_cp(fft_size, pattern, cred_coeff)
+
+
+def avail_data_cells(fft_size: int, cred_coeff: int, pattern: str) -> int:
+    """Available data cells per data symbol (A/322 Tables 7.3/7.4)."""
+    from . import pilot_tables
+    return pilot_tables.avail_data(fft_size, cred_coeff, pattern)
+
+
+def avail_data_8k(pattern: str) -> int:
+    """Available data cells per data symbol for 8K, cred 0 (Tables 7.3/7.4)."""
+    return avail_data_cells(RF33_FFT, RF33_CRED, pattern)
 
 
 # Scattered pilot pattern signaling values (A/322 Table 9.12, SISO).
@@ -438,6 +441,28 @@ SP_PATTERN_SIGNALING = {
     8: 'SP12_2', 9: 'SP12_4', 10: 'SP16_2', 11: 'SP16_4',
     12: 'SP24_2', 13: 'SP24_4', 14: 'SP32_2', 15: 'SP32_4',
 }
+
+# Allowed scattered-pilot patterns per FFT size, the union over guard intervals
+# of A/322 Table 8.3 (SISO).  This is confirmed by the constant-data-carrier
+# identity in ``tools/fetch_pilot_tables.py``: a pattern is allowed for an FFT
+# size exactly when its data-carrier count is invariant across the pilot lattice
+# phases, and the gate asserts that set equals this one.
+ALLOWED_SP = {
+    8192: frozenset({
+        'SP3_2', 'SP3_4', 'SP4_2', 'SP4_4', 'SP6_2', 'SP6_4', 'SP8_2', 'SP8_4',
+        'SP12_2', 'SP12_4', 'SP16_2', 'SP16_4', 'SP32_2', 'SP32_4'}),
+    16384: frozenset({
+        'SP3_2', 'SP3_4', 'SP4_2', 'SP4_4', 'SP6_2', 'SP6_4', 'SP8_2', 'SP8_4',
+        'SP12_2', 'SP12_4', 'SP16_2', 'SP16_4', 'SP24_2', 'SP24_4',
+        'SP32_2', 'SP32_4'}),
+    32768: frozenset({
+        'SP3_2', 'SP6_2', 'SP8_2', 'SP12_2', 'SP16_2', 'SP24_2', 'SP32_2'}),
+}
+
+
+def allowed_patterns(fft_size: int) -> frozenset:
+    """Scattered-pilot patterns allowed for an FFT size (A/322 Table 8.3 union)."""
+    return ALLOWED_SP[fft_size]
 
 # ===========================================================================
 # Large tables are defined in their own modules and re-exported here so callers

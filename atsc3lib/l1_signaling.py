@@ -265,7 +265,7 @@ def _parse_plp(r: _BitReader, n_rf: int, first_sub_mimo: int,
             else:
                 for _ in range(hti_ti):
                     r.read('L1D_plp_HTI_num_fec_blocks', 12)
-            r.read('L1D_plp_HTI_cell_interleaver', 1)
+            hti_cell = r.read('L1D_plp_HTI_cell_interleaver', 1)
     else:
         ldm_level = r.read('L1D_plp_ldm_injection_level', 5)
 

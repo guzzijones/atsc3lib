@@ -56,8 +56,10 @@ def decode_main(argv=None):
     parser.add_argument('--max-iterations', type=int, default=100,
                         help='LDPC iteration cap')
     parser.add_argument('--plp', type=int, default=None,
-                        help='also decode this subframe-0 PLP id (default: '
-                             'smallest subframe-0 PLP)')
+                        help='also decode this PLP id (default: smallest layer-0 '
+                             'PLP of --subframe)')
+    parser.add_argument('--subframe', type=int, default=0,
+                        help='subframe whose PLP to decode (default 0)')
     parser.add_argument('--no-payload', action='store_true',
                         help='decode signalling only, skip the PLP payload')
     parser.add_argument('-v', '--verbose', action='store_true')
@@ -83,10 +85,10 @@ def decode_main(argv=None):
         from .payload import decode_streams
         iq = read_hackrf_iq(args.file)
         _, payload = decode_plp_payload(
-            iq, args.rate, plp_id=args.plp,
+            iq, args.rate, plp_id=args.plp, subframe=args.subframe,
             max_iterations=args.max_iterations, result=result)
         if payload is None:
-            print("  Payload: no subframe-0 PLP decoded")
+            print(f"  Payload: no PLP decoded in subframe {args.subframe}")
         else:
             print(f"  Payload: PLP {payload.plp_id}, "
                   f"{payload.n_converged}/{payload.n_fec} FEC blocks converged")

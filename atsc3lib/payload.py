@@ -61,11 +61,17 @@ def _pilots(noc: int, dx: int, dy: int, l: int, sbs: bool,
 
 
 def common_cp_relative(noc: int, fft_size: int) -> np.ndarray:
-    """Common continual pilots (CP8) as relative carrier indices."""
+    """Common continual pilots (CP8/CP16/CP32) as relative carrier indices.
+
+    A/322 8.1.4.1: the 8K/16K sets are derived from CP32; ``pilot_tables``
+    holds the exact absolute set per FFT size.  ``noc`` selects which fall in
+    the configured carrier range.
+    """
+    from . import pilot_tables
     origin = (spec.NOC_MAX[fft_size] - noc) // 2
-    cp8 = np.ceil(np.asarray(spec.CP32[::4], dtype=float) / 4.0).astype(int)
-    cp8 = cp8[(cp8 >= origin) & (cp8 < origin + noc)]
-    return cp8 - origin
+    cps = pilot_tables.COMMON_CP[fft_size]
+    return np.asarray([c - origin for c in cps if origin <= c < origin + noc],
+                      dtype=int)
 
 
 @dataclass
@@ -236,12 +242,12 @@ class QPSKPlpChain(DataPlpChain):
 
 @dataclass
 class CellPool:
-    """The available data cells of subframe 0, in cell order.
+    """The available data cells of one subframe, in cell order.
 
-    ``cells`` is the concatenation of the Preamble's spare cells (after
-    L1-Basic/L1-Detail) and the data symbols' cells, each frequency-
-    de-interleaved.  ``symbol_of`` maps each cell to its OFDM symbol index
-    (0-based within the subframe; -1 for Preamble spare cells).
+    ``cells`` is the concatenation of the Preamble's spare cells (subframe 0
+    only, after L1-Basic/L1-Detail) and the data symbols' cells, each
+    frequency-de-interleaved.  ``symbol_of`` maps each cell to its OFDM symbol
+    index (0-based within the subframe; -1 for Preamble spare cells).
     """
     cells: np.ndarray
     symbol_of: np.ndarray
@@ -249,12 +255,70 @@ class CellPool:
     n_null: int
 
 
+def build_data_symbol_pool(y: np.ndarray, t0: int, fft_size: int,
+                           guard_interval: int, noc: int, dx: int, dy: int,
+                           n_data_symbols: int, sbs_symbols=(0,),
+                           pattern: str = 'SP4_2', sbs_null: int = None,
+                           cred_coeff: int = 0,
+                           fi_offset: int = 0) -> CellPool:
+    """Cells of a subframe's data symbols, frequency-de-interleaved in order.
+
+    This is the generic (no-Preamble) half of :func:`build_cell_pool`; a
+    subframe after the first inherits no Preamble cells, so its pool is exactly
+    this.  ``fi_offset`` is the A/322 7.3 frequency-interleaver symbol counter
+    origin for the first data symbol: 1 for subframe 0 (the Preamble is symbol
+    0), and **0 for every subsequent subframe**, because the counter resets at
+    each subframe boundary (A/322 7.3 rule 2; settled by experiment in the
+    reference receiver).
+
+    Args:
+        y: Main-rate IQ starting at the bootstrap (sample 0).
+        t0: Sample index of this subframe's first symbol (guard interval start).
+        fft_size, guard_interval, noc: Subframe geometry.
+        dx, dy: Scattered pilot pattern spacings.
+        n_data_symbols: Symbols in the subframe (data + subframe boundary).
+        sbs_symbols: Indices that are subframe boundary symbols.
+        pattern: Scattered-pilot pattern (additional continual pilots).
+        sbs_null: Null cells per SBS (signalled as L1D_sbs_null_cells); the
+            8K cred-0 value is used when None (subframe-0 default).
+        cred_coeff: Carrier-reduction coefficient (selects the CP/pilot sets).
+        fi_offset: Frequency-interleaver symbol counter origin.
+
+    Returns:
+        CellPool for the subframe (``n_preamble_spare`` is 0).
+    """
+    n_null = spec.SBS_NULL_8K_CRED0 if sbs_null is None else int(sbs_null)
+    lo_n = n_null // 2
+    hi_n = n_null - lo_n
+    add_cp = spec.additional_cp(pattern, fft_size, cred_coeff)
+
+    parts, owner = [], []
+    for l in range(n_data_symbols):
+        sbs = l in tuple(sbs_symbols)
+        start = t0 + (fft_size + guard_interval) * l + guard_interval
+        result = data_symbol_cells(
+            y[start:start + fft_size], fft_size, noc, dx, dy, l, sbs,
+            add_cp=add_cp)
+        x = fi_deinterleave(result.cells, fi_offset + l, fft_size)
+        if sbs:
+            x = x[lo_n:len(x) - hi_n]
+        parts.append(x)
+        owner.append(np.full(len(x), l, dtype=int))
+
+    return CellPool(cells=np.concatenate(parts),
+                    symbol_of=np.concatenate(owner),
+                    n_preamble_spare=0, n_null=int(n_null))
+
+
 def build_cell_pool(y: np.ndarray, t0: int, fft_size: int, guard_interval: int,
                     noc: int, dx: int, dy: int, n_data_symbols: int,
                     sbs_symbols=(0,), preamble_structure: int = 27,
                     l1_cells: int = 484 + 880,
                     pattern: str = None, sbs_null: int = None) -> CellPool:
-    """Build subframe data-cell pool from a frame at the main sample rate.
+    """Build the subframe-0 cell pool: Preamble spare cells + data symbols.
+
+    Uses :func:`build_data_symbol_pool` for the data symbols with the
+    frequency-interleaver counter origin 1 (the Preamble is frame symbol 0).
 
     Args:
         y: Main-rate IQ starting at the bootstrap (sample 0).
@@ -265,10 +329,8 @@ def build_cell_pool(y: np.ndarray, t0: int, fft_size: int, guard_interval: int,
         sbs_symbols: Indices that are subframe boundary symbols.
         preamble_structure: Bootstrap-decoded structure (for the preamble).
         l1_cells: Number of Preamble cells consumed by L1-Basic + L1-Detail.
-        pattern: Scattered-pilot pattern name (for the additional continual
-            pilots); defaults to the 8K SP4_2 pattern used by RF33.
-        sbs_null: Null cells per subframe boundary symbol; defaults to the
-            8K cred-0 value.
+        pattern: Scattered-pilot pattern name; defaults to 8K SP4_2.
+        sbs_null: Null cells per subframe boundary symbol; 8K cred-0 default.
 
     Returns:
         CellPool for the subframe.
@@ -288,28 +350,15 @@ def build_cell_pool(y: np.ndarray, t0: int, fft_size: int, guard_interval: int,
                          pre.fft)
     spare = xp[l1_cells:]
 
-    n_null = spec.SBS_NULL_8K_CRED0 if sbs_null is None else int(sbs_null)
-    lo_n = n_null // 2
-    hi_n = n_null - lo_n
-    add_cp = spec.additional_cp(pattern or 'SP4_2')
+    data = build_data_symbol_pool(
+        y, t0 + (pre.fft + pre.gi), fft_size, guard_interval, noc, dx, dy,
+        n_data_symbols, sbs_symbols=sbs_symbols, pattern=pattern or 'SP4_2',
+        sbs_null=sbs_null, fi_offset=1)
 
-    parts = [spare]
-    owner = [np.full(len(spare), -1, dtype=int)]
-    for l in range(n_data_symbols):
-        sbs = l in tuple(sbs_symbols)
-        start = t0 + (fft_size + guard_interval) * (1 + l) + guard_interval
-        result = data_symbol_cells(
-            y[start:start + fft_size], fft_size, noc, dx, dy, l, sbs,
-            add_cp=add_cp)
-        x = fi_deinterleave(result.cells, l + 1, fft_size)
-        if sbs:
-            x = x[lo_n:len(x) - hi_n]
-        parts.append(x)
-        owner.append(np.full(len(x), l, dtype=int))
-
-    return CellPool(cells=np.concatenate(parts),
-                    symbol_of=np.concatenate(owner),
-                    n_preamble_spare=int(len(spare)), n_null=int(n_null))
+    return CellPool(cells=np.concatenate([spare, data.cells]),
+                    symbol_of=np.concatenate([
+                        np.full(len(spare), -1, dtype=int), data.symbol_of]),
+                    n_preamble_spare=int(len(spare)), n_null=data.n_null)
 
 
 @dataclass
@@ -366,26 +415,15 @@ PLP_NINNER = {
 }
 
 
-def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
-                         guard_interval: int, noc: int, dx: int, dy: int,
-                         n_data_symbols: int, sbs_symbols,
-                         preamble_structure: int, l1_cells: int,
-                         plp, max_iterations: int = 100,
-                         pattern: str = None, sbs_null: int = None) -> PlpPayload:
-    """Decode one PLP of subframe 0 from its L1-Detail ``plp`` config.
+def decode_plp_from_pool(pool: CellPool, plp, max_iterations: int = 100
+                         ) -> PlpPayload:
+    """Decode one PLP from an already-built subframe cell pool.
 
     Handles any tabulated QPSK/16QAM/64QAM/256QAM rate at either frame length
     (A/322 Table 9.8 ``fec_type``), the HTI twisted block interleaver (TI mode
-    2) and (for the RF33 PLP-0 shape) the multi-FEC-block geometry.
+    2) and the multi-FEC-block geometry.
     """
-    pool = build_cell_pool(y, t0, fft_size, guard_interval, noc, dx, dy,
-                           n_data_symbols, sbs_symbols=sbs_symbols,
-                           preamble_structure=preamble_structure,
-                           l1_cells=l1_cells, pattern=pattern,
-                           sbs_null=sbs_null)
-    lo = plp.start
-    hi = plp.start + plp.size
-    cells = pool.cells[lo:hi]
+    cells = pool.cells[plp.start:plp.start + plp.size]
     mod = MOD_NAME.get(plp.modulation)
     if mod is None:
         raise NotImplementedError(
@@ -401,6 +439,39 @@ def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
                               max_iterations=max_iterations)
     payload.plp_id = plp.plp_id
     return payload
+
+
+def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
+                         guard_interval: int, noc: int, dx: int, dy: int,
+                         n_data_symbols: int, sbs_symbols,
+                         preamble_structure: int, l1_cells: int,
+                         plp, max_iterations: int = 100,
+                         pattern: str = None, sbs_null: int = None) -> PlpPayload:
+    """Decode one PLP of subframe 0 from its L1-Detail ``plp`` config."""
+    pool = build_cell_pool(y, t0, fft_size, guard_interval, noc, dx, dy,
+                           n_data_symbols, sbs_symbols=sbs_symbols,
+                           preamble_structure=preamble_structure,
+                           l1_cells=l1_cells, pattern=pattern,
+                           sbs_null=sbs_null)
+    return decode_plp_from_pool(pool, plp, max_iterations=max_iterations)
+
+
+def decode_subframe_plp(y: np.ndarray, t0: int, fft_size: int,
+                        guard_interval: int, noc: int, dx: int, dy: int,
+                        n_data_symbols: int, sbs_symbols, plp,
+                        max_iterations: int = 100, pattern: str = 'SP4_2',
+                        sbs_null: int = None, cred_coeff: int = 0,
+                        fi_offset: int = 0) -> PlpPayload:
+    """Decode one PLP of a subframe after the first (no Preamble, FI reset).
+
+    ``t0`` is this subframe's first symbol (guard-interval start); the frequency
+    interleaver counter resets here, so ``fi_offset`` is 0 (A/322 7.3 rule 2).
+    """
+    pool = build_data_symbol_pool(
+        y, t0, fft_size, guard_interval, noc, dx, dy, n_data_symbols,
+        sbs_symbols=sbs_symbols, pattern=pattern, sbs_null=sbs_null,
+        cred_coeff=cred_coeff, fi_offset=fi_offset)
+    return decode_plp_from_pool(pool, plp, max_iterations=max_iterations)
 
 
 def decode_data_plp(cells: np.ndarray, mod: str, rate: int, ninner: int = NINNER_SHORT,

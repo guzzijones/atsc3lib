@@ -28,6 +28,7 @@ from .frontend import read_hackrf_iq, resample_iq
 from .l1_basic import L1BasicCodec
 from .l1_detail import L1DetailCodec
 from .l1_signaling import L1Basic, L1Detail, parse_l1_basic, parse_l1_detail
+from . import l1_signaling
 from .preamble import preamble_l1_cells
 
 
@@ -165,7 +166,7 @@ def _subframe0_geometry(result):
     """Resolve subframe-0 demod geometry from a decoded ReceiverResult."""
     lb = result.l1_basic
     sf0 = result.l1_detail.subframes[0]
-    fft = {0: 8192, 1: 16384, 2: 32768}.get(lb.first_sub_fft_size, 8192)
+    fft = l1_signaling.FFT_SIZE_2BIT.get(lb.first_sub_fft_size, 8192)
     gi = spec.guard_interval(fft, lb.first_sub_guard_interval)
     noc = spec.noc(fft, lb.first_sub_reduced_carriers)
     pattern = spec.SP_PATTERN_SIGNALING.get(
@@ -183,29 +184,84 @@ def _subframe0_geometry(result):
     sbs_null = sf0.get('sbs_null_cells')
     return dict(fft=fft, gi=gi, noc=noc, dx=dx, dy=dy,
                 n_data_symbols=n_data_symbols, sbs=tuple(sbs),
-                pattern=pattern, sbs_null=sbs_null)
+                pattern=pattern, sbs_null=sbs_null,
+                cred=lb.first_sub_reduced_carriers, fi_offset=1)
+
+
+def subframe_geometry(result, index: int):
+    """Resolve the demod geometry of subframe ``index`` from L1 signalling.
+
+    Subframe 0 draws its geometry from L1-Basic (the first-subframe fields);
+    subframes after it carry their own L1-Detail fields (A/322 Table 9.8).
+    ``fi_offset`` is the frequency-interleaver symbol-counter origin for the
+    first data symbol: 1 for subframe 0 (the Preamble is symbol 0) and 0 for
+    every later subframe, whose counter resets at the boundary (A/322 7.3).
+    """
+    if index == 0:
+        return _subframe0_geometry(result)
+    sf = result.l1_detail.subframes[index]
+    fft = l1_signaling.FFT_SIZE[sf['fft_size']]
+    gi = spec.guard_interval(fft, sf['guard_interval'])
+    cred = sf['reduced_carriers']
+    noc = spec.noc(fft, cred)
+    pattern = spec.SP_PATTERN_SIGNALING[sf['scattered_pilot_pattern']]
+    dx, dy = spec.SP_DXDY[pattern]
+    n_data_symbols = sf['num_ofdm_symbols'] + 1
+    sbs = []
+    if sf.get('sbs_first'):
+        sbs.append(0)
+    if sf.get('sbs_last'):
+        sbs.append(n_data_symbols - 1)
+    return dict(fft=fft, gi=gi, noc=noc, dx=dx, dy=dy,
+                n_data_symbols=n_data_symbols, sbs=tuple(sbs),
+                pattern=pattern, sbs_null=sf.get('sbs_null_cells'),
+                cred=cred, fi_offset=0)
+
+
+def _subframe_start_offset(result) -> int:
+    """Frame sample offset of subframe 1's first symbol (guard-interval start).
+
+    The boot span is added by the caller (it is where ``main`` begins).  This
+    accumulates whole symbols from the first Preamble symbol through the end of
+    subframe 0, each at its own (FFT + GI) pitch.
+    """
+    lb = result.l1_basic
+    structure = result.preamble_structure
+    pre = spec.PREAMBLE_STRUCTURE[structure]
+    np_sym = lb.preamble_num_symbols + 1
+    off = (pre.fft + pre.gi) * np_sym
+    sf0 = _subframe0_geometry(result)
+    off += (sf0['fft'] + sf0['gi']) * sf0['n_data_symbols']
+    return off
 
 
 def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
-                       max_iterations: int = 100, result=None):
-    """Decode one subframe-0 data PLP's payload.
+                       max_iterations: int = 100, result=None,
+                       subframe: int = 0):
+    """Decode one data PLP's payload from a named subframe (default 0).
 
-    ``plp_id`` selects the PLP; when None the smallest subframe-0 PLP is
-    chosen (the RF33 PLP-16 signalling shape).  ``result`` may supply an
-    already-decoded :class:`ReceiverResult` to avoid re-running the signalling
-    chain.  Returns ``(result, payload)`` with ``payload`` a
+    ``plp_id`` selects the PLP; when None the smallest layer-0 PLP of the
+    subframe is chosen.  ``result`` may supply an already-decoded
+    :class:`ReceiverResult` to avoid re-running the signalling chain.  Returns
+    ``(result, payload)`` with ``payload`` a
     :class:`~atsc3lib.payload.PlpPayload` or None.
+
+    Subframe 0 includes the Preamble's spare cells; every later subframe is
+    demodulated at its own FFT/GI/pilot geometry with the A/322 7.3 frequency
+    interleaver counter reset at the subframe boundary.
     """
-    from .payload import decode_subframe0_plp
+    from .payload import decode_subframe0_plp, decode_subframe_plp
 
     if result is None:
         result = decode_signaling(iq_main, fs_main,
                                   max_iterations=max_iterations)
     if not result.l1_detail_ok:
         return result, None
+    if subframe >= len(result.l1_detail.subframes):
+        return result, None
 
-    sf0 = result.l1_detail.subframes[0]
-    candidates = [p for p in sf0['plps'] if p.layer == 0]
+    sf = result.l1_detail.subframes[subframe]
+    candidates = [p for p in sf['plps'] if p.layer == 0]
     if not candidates:
         return result, None
     if plp_id is None:
@@ -215,16 +271,25 @@ def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
     if target is None:
         return result, None
 
-    g = _subframe0_geometry(result)
+    g = subframe_geometry(result, subframe)
     _, main, structure, _ = _bootstrap_to_preamble(iq_main, fs_main)
-    l1_cells = 484 + result.l1_basic.l1_detail_total_cells
     boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
                           * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
-    payload = decode_subframe0_plp(
-        main, boot_span, g['fft'], g['gi'], g['noc'], g['dx'], g['dy'],
-        g['n_data_symbols'], g['sbs'], preamble_structure=structure,
-        l1_cells=l1_cells, plp=target, max_iterations=max_iterations,
-        pattern=g['pattern'], sbs_null=g['sbs_null'])
+    if subframe == 0:
+        l1_cells = 484 + result.l1_basic.l1_detail_total_cells
+        payload = decode_subframe0_plp(
+            main, boot_span, g['fft'], g['gi'], g['noc'], g['dx'], g['dy'],
+            g['n_data_symbols'], g['sbs'], preamble_structure=structure,
+            l1_cells=l1_cells, plp=target, max_iterations=max_iterations,
+            pattern=g['pattern'], sbs_null=g['sbs_null'])
+    else:
+        t0 = boot_span + _subframe_start_offset(result)
+        payload = decode_subframe_plp(
+            main, t0, g['fft'], g['gi'], g['noc'], g['dx'], g['dy'],
+            g['n_data_symbols'], g['sbs'], plp=target,
+            max_iterations=max_iterations, pattern=g['pattern'],
+            sbs_null=g['sbs_null'], cred_coeff=g['cred'],
+            fi_offset=g['fi_offset'])
     return result, payload
 
 

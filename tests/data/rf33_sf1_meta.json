@@ -1,0 +1,26 @@
+{
+ "fft": 16384,
+ "gi": 1536,
+ "noc": 13825,
+ "dx": 4,
+ "dy": 4,
+ "n_data_symbols": 75,
+ "sbs_symbols": [
+  0,
+  74
+ ],
+ "pattern": "SP4_4",
+ "sbs_null": 1609,
+ "cred": 0,
+ "fi_offset": 0,
+ "plp1": {
+  "plp_id": 1,
+  "start": 0,
+  "size": 947700,
+  "mod": 3,
+  "code_rate": 9,
+  "ti_mode": 2,
+  "nti": 3,
+  "fec_type": 1
+ }
+}

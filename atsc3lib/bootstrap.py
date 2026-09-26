@@ -305,7 +305,8 @@ def _extract_signaling(iq: np.ndarray, start: int, cores: List[np.ndarray],
 
 
 def detect_bootstrap(iq: np.ndarray, search_limit: int = None,
-                     num_candidates: int = 8) -> BootstrapDetection:
+                     num_candidates: int = 8,
+                     versions=None) -> BootstrapDetection:
     """Detect the bootstrap in a received segment at the native bootstrap rate.
 
     Searches all 16 major/minor version hypotheses and, for each, validates the
@@ -316,6 +317,8 @@ def detect_bootstrap(iq: np.ndarray, search_limit: int = None,
         iq: Complex samples at the 6.144 MHz bootstrap rate.
         search_limit: Optional cap on samples to search (for speed).
         num_candidates: Number of correlation peaks to validate per hypothesis.
+        versions: Optional iterable of (major, minor) hypotheses to try; all 16
+            when None.  Restricting this cuts the cost proportionally.
     """
     symbol_len = C_SIZE + BOOTSTRAP_FFT_SIZE + B_SIZE
     total_len = symbol_len * NUM_BOOTSTRAP_SYMBOLS
@@ -326,8 +329,10 @@ def detect_bootstrap(iq: np.ndarray, search_limit: int = None,
     if search_limit is not None and len(iq) > search_limit + total_len:
         iq = iq[:search_limit + total_len]
 
+    hypotheses = (list(MINOR_VERSION_SEEDS.items()) if versions is None
+                  else [(v, MINOR_VERSION_SEEDS[v]) for v in versions])
     best = None  # (score, major, minor, start, signaling)
-    for (major, minor), _seed in MINOR_VERSION_SEEDS.items():
+    for (major, minor), _seed in hypotheses:
         cores = _build_cores(major, minor)
         ref = _assemble_symbol(0, cores[0])
         corr = _fft_correlate_abs(iq, ref)

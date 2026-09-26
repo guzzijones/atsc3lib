@@ -66,10 +66,14 @@ from .l1_detail import L1DetailCodec
 
 # Payload
 from .payload import (
-    QPSKPlpChain, DataPlpChain, build_cell_pool, data_symbol_cells,
-    qpsk_demap_llr, CellPool, QPSK_POINTS, PlpPayload,
-    decode_subframe0_qpsk_plp, DecodedStreams, decode_streams,
+    QPSKPlpChain, DataPlpChain, build_cell_pool, build_data_symbol_pool,
+    data_symbol_cells, qpsk_demap_llr, CellPool, QPSK_POINTS, PlpPayload,
+    decode_subframe0_qpsk_plp, decode_subframe0_plp, decode_subframe_plp,
+    decode_plp_from_pool, DecodedStreams, decode_streams,
 )
+
+# Pilot / data-cell tables (A/322 Annex D/F), fetched from the pinned source
+from . import pilot_tables
 
 # Receiver (full chain)
 from .receiver import (
@@ -142,12 +146,16 @@ __all__ = [
     "QPSKPlpChain",
     "DataPlpChain",
     "build_cell_pool",
+    "build_data_symbol_pool",
     "data_symbol_cells",
     "qpsk_demap_llr",
     "CellPool",
     "QPSK_POINTS",
     "PlpPayload",
     "decode_subframe0_qpsk_plp",
+    "decode_subframe0_plp",
+    "decode_subframe_plp",
+    "decode_plp_from_pool",
     "DecodedStreams",
     "decode_streams",
     # receiver

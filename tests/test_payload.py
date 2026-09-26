@@ -23,7 +23,7 @@ class TestGeometry:
     def test_data_symbol_cell_counts(self):
         # 8K, cred 0, SP4_2, normal data symbol and SBS.
         add = spec.additional_cp('SP4_2')
-        assert spec.AVAIL_DATA_8K['SP4_2'] == 5999
+        assert spec.avail_data_8k('SP4_2') == 5999
         assert spec.SBS_ACTIVE_8K_CRED0 == 5009
         assert spec.SBS_NULL_8K_CRED0 == 127
 
@@ -83,5 +83,5 @@ class TestAirFrame:
         result = data_symbol_cells(
             y[start:start + meta['fft']], meta['fft'], meta['noc'],
             meta['dx'], meta['dy'], l, False, add_cp=add)
-        assert len(result.cells) == spec.AVAIL_DATA_8K['SP4_2']
+        assert len(result.cells) == spec.avail_data_8k('SP4_2')
         assert result.pilot_coherence > 0.5

@@ -98,6 +98,16 @@ class TestDetection:
         with pytest.raises(ValueError, match="samples"):
             detect_bootstrap(np.zeros(100, dtype=np.complex128))
 
+    def test_version_restriction(self):
+        # Restricting the hypotheses still finds a matching bootstrap...
+        wf = generate_bootstrap(27, major=0, minor=0)
+        rx = np.concatenate([np.zeros(300, dtype=np.complex128), wf])
+        det = detect_bootstrap(rx, versions=[(0, 0)])
+        assert det.structure == 27
+        # ...and an empty hypothesis set fails cleanly.
+        with pytest.raises(ValueError, match="No valid bootstrap"):
+            detect_bootstrap(rx, versions=[])
+
 
 class TestFineCfo:
     @pytest.mark.parametrize('cfo_hz', [0.0, 250.0, -700.0])
