@@ -26,10 +26,10 @@ from .bootstrap import detect_bootstrap, fine_cfo
 from .crc import crc32_ok
 from .frontend import read_hackrf_iq, resample_iq
 from .l1_basic import L1BasicCodec
-from .l1_detail import L1DetailCodec
+from .l1_detail import L1DetailCodec, preamble_block_deinterleave
 from .l1_signaling import L1Basic, L1Detail, parse_l1_basic, parse_l1_detail
 from . import l1_signaling
-from .preamble import preamble_l1_cells
+from .preamble import preamble_l1_cells, preamble_symbol_cells
 
 
 @dataclass
@@ -119,13 +119,25 @@ def decode_signaling(iq_main: np.ndarray, fs_main: float,
                               error="L1-Basic did not verify")
     l1b = parse_l1_basic(lb_bits)
 
-    # --- L1-Detail: next L1B_L1_Detail_total_cells cells ---
+    # --- L1-Detail: L1B_L1_Detail_total_cells across the Preamble symbols ---
     ksig = l1b.l1_detail_size_bytes * 8
     ld_codec = L1DetailCodec(l1b.l1_detail_fec_type + 1, ksig,
                              max_iterations=max_iterations)
-    lo = lb_codec.n_cells
-    ld_bits, bch_ok, ld_crc_ok = ld_codec.decode_cells(
-        cells[lo:lo + ld_codec.n_cells])
+    boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
+                          * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
+    detail_cells = _preamble_l1_detail_cells(
+        cells, main, boot_span, structure, params, l1b,
+        lb_codec.n_cells, ld_codec.n_cells)
+    if detail_cells is None:
+        return ReceiverResult(preamble_structure=structure, l1_basic=l1b,
+                              l1_basic_ok=True, l1_detail=None,
+                              l1_detail_ok=False, bootstrap_start=start,
+                              frame_start=start,
+                              error="L1-Detail cells incomplete")
+    if l1b.preamble_num_symbols > 0:
+        detail_cells = preamble_block_deinterleave(
+            detail_cells, l1b.preamble_num_symbols + 1)
+    ld_bits, bch_ok, ld_crc_ok = ld_codec.decode_cells(detail_cells)
     if not (bch_ok and ld_crc_ok):
         return ReceiverResult(preamble_structure=structure, l1_basic=l1b,
                               l1_basic_ok=True, l1_detail=None,
@@ -137,6 +149,36 @@ def decode_signaling(iq_main: np.ndarray, fs_main: float,
     return ReceiverResult(preamble_structure=structure, l1_basic=l1b, l1_basic_ok=True,
                           l1_detail=l1d, l1_detail_ok=True,
                           bootstrap_start=start, frame_start=start)
+
+
+def _preamble_l1_detail_cells(first_cells, main, boot_span, structure, params,
+                              l1b, n_l1b_cells, n_detail_cells):
+    """Gather L1-Detail cells from the Preamble symbol(s).
+
+    L1-Basic occupies the start of the first Preamble symbol; L1-Detail fills
+    the rest of that symbol and then the later Preamble symbols (A/322
+    7.2.5.1/7.2.5.2).  The later symbols use ``L1B_preamble_reduced_carriers``
+    and the frequency-interleaver symbol counter continues frame-frame (the
+    first Preamble symbol is symbol 0).  Returns the first ``n_detail_cells``
+    cells in mapping order, or None when the capture does not contain them.
+    """
+    parts = [first_cells[n_l1b_cells:]]
+    n_have = len(parts[0])
+    fft, gi = params.fft, params.gi
+    cred = l1b.preamble_reduced_carriers
+    for sym_index in range(1, l1b.preamble_num_symbols + 1):
+        if n_have >= n_detail_cells:
+            break
+        start = boot_span + (fft + gi) * sym_index + gi
+        body = main[start:start + fft]
+        if len(body) < fft:
+            return None
+        sym_cells = preamble_symbol_cells(
+            body.astype(np.complex128), structure, fi_index=sym_index,
+            cred_coeff=cred)
+        parts.append(sym_cells)
+        n_have += len(sym_cells)
+    return np.concatenate(parts)[:n_detail_cells]
 
 
 def decode_capture(path: str, fs_main: float, fmt: str = 'auto',
@@ -182,10 +224,13 @@ def _subframe0_geometry(result):
     if sf0.get('sbs_last') or lb.first_sub_sbs_last:
         sbs.append(n_data_symbols - 1)
     sbs_null = sf0.get('sbs_null_cells')
+    n_preamble_symbols = lb.preamble_num_symbols + 1
     return dict(fft=fft, gi=gi, noc=noc, dx=dx, dy=dy,
                 n_data_symbols=n_data_symbols, sbs=tuple(sbs),
                 pattern=pattern, sbs_null=sbs_null,
-                cred=lb.first_sub_reduced_carriers, fi_offset=1)
+                cred=lb.first_sub_reduced_carriers,
+                n_preamble_symbols=n_preamble_symbols,
+                fi_offset=n_preamble_symbols)
 
 
 def subframe_geometry(result, index: int):
@@ -276,12 +321,17 @@ def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
     boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
                           * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
     if subframe == 0:
-        l1_cells = 484 + result.l1_basic.l1_detail_total_cells
+        n_l1b = L1BasicCodec(
+            spec.PREAMBLE_STRUCTURE[structure].l1b_mode).n_cells
+        l1_cells = n_l1b + result.l1_basic.l1_detail_total_cells
         payload = decode_subframe0_plp(
             main, boot_span, g['fft'], g['gi'], g['noc'], g['dx'], g['dy'],
             g['n_data_symbols'], g['sbs'], preamble_structure=structure,
             l1_cells=l1_cells, plp=target, max_iterations=max_iterations,
-            pattern=g['pattern'], sbs_null=g['sbs_null'])
+            pattern=g['pattern'], sbs_null=g['sbs_null'],
+            preamble_num_symbols=g['n_preamble_symbols'],
+            preamble_reduced_carriers=result.l1_basic.preamble_reduced_carriers,
+            l1b_cells=n_l1b)
     else:
         t0 = boot_span + _subframe_start_offset(result)
         payload = decode_subframe_plp(

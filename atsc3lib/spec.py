@@ -264,28 +264,34 @@ L1B_MODES: Dict[int, L1BasicMode] = {
 
 @dataclass(frozen=True)
 class L1BasicLengths:
-    """Derived L1-Basic lengths for a mode (A/322 6.5.2.8)."""
-    n_fec: int           # transmitted coded bits Nfec
-    n_cells: int         # modulation cells = n_fec / eta
+    """Derived L1-Basic lengths for a mode (A/322 6.5.2.7/6.5.2.8)."""
+    n_fec: int           # base coded bits Nfec (before repetition)
+    n_tx: int            # transmitted bits Nfec + Nrepeat (6.5.2.9)
+    n_cells: int         # modulation cells = (Nfec + Nrepeat) / eta
     n_punc: int          # punctured parity bits Npunc
     n_repeat: int        # repeated bits (Mode 1 only)
 
 
 def l1b_lengths(mode: int) -> L1BasicLengths:
-    """Derive L1-Basic lengths for a mode (A/322 6.5.2.8).
+    """Derive L1-Basic lengths for a mode (A/322 6.5.2.7/6.5.2.8).
 
     ``Npunc_tmp = A*(Kldpc - Nouter) + B``
     ``Nfec_tmp = Nouter + (Ninner - Kldpc) - Npunc_tmp``
     ``Nfec     = floor(Nfec_tmp / eta) * eta``
     ``Npunc    = Npunc_tmp - (Nfec_tmp - Nfec)``
+
+    Repetition (6.5.2.7, Mode 1 only) appends ``Nrepeat`` bits, so the
+    transmitted word is ``Nfec + Nrepeat`` bits; this is the count A/322 prints
+    in Table 6.17 (Mode 1 = 3820 cells = 7640 bits / 2).
     """
     cfg = L1B_MODES[mode]
     n_punc_tmp = cfg.punct_a * (L1B_KLDPC - L1B_NOUTER) + cfg.punct_b
     n_fec_tmp = L1B_NOUTER + L1B_NLDPC_PARITY - n_punc_tmp
     n_fec = (n_fec_tmp // cfg.eta) * cfg.eta
     n_punc = n_punc_tmp - (n_fec_tmp - n_fec)
+    n_tx = n_fec + cfg.n_repeat
     return L1BasicLengths(
-        n_fec=n_fec, n_cells=n_fec // cfg.eta, n_punc=n_punc,
+        n_fec=n_fec, n_tx=n_tx, n_cells=n_tx // cfg.eta, n_punc=n_punc,
         n_repeat=cfg.n_repeat)
 
 
@@ -312,6 +318,9 @@ class L1DetailMode:
     shortening: List[int]      # Table 6.20
     groupwise: List[int]       # Table 6.21/6.22
     groupwise_first: int       # first parity group index (9 or 18)
+    repeat_c_num: int = 0      # Table 6.23 repetition C numerator (Mode 1 only)
+    repeat_c_den: int = 1      # Table 6.23 repetition C denominator
+    repeat_d: int = 0          # Table 6.23 repetition D (Mode 1 only)
 
 
 L1D_MODES: Dict[int, L1DetailMode] = {
@@ -319,7 +328,8 @@ L1D_MODES: Dict[int, L1DetailMode] = {
                     [7, 8, 5, 4, 1, 2, 6, 3, 0],
                     [16, 22, 27, 30, 37, 44, 20, 23, 25, 32, 38, 41, 9, 10,
                      17, 18, 21, 33, 35, 14, 28, 12, 15, 19, 11, 24, 29, 34,
-                     36, 13, 40, 43, 31, 26, 39, 42], 9),
+                     36, 13, 40, 43, 31, 26, 39, 42], 9,
+                    repeat_c_num=61, repeat_c_den=16, repeat_d=-508),
     2: L1DetailMode(2, 3240, 3072, 3, False, 2, 2, 1, 6036, 12960,
                     [6, 1, 7, 8, 0, 2, 4, 3, 5],
                     [9, 31, 23, 10, 11, 25, 43, 29, 36, 16, 27, 34, 26, 18,
@@ -363,8 +373,10 @@ class L1DetailLengths:
     ninner: int
     eta: int
     n_fec: int
+    n_tx: int
     n_parity_kept: int
     n_punc: int
+    n_repeat: int
     n_cells: int
     rate: int
 
@@ -373,6 +385,10 @@ def l1d_lengths(mode: int, ksig: int) -> L1DetailLengths:
     """Derive L1-Detail lengths for a mode and Ksig.
 
     Raises if Ksig exceeds Kseg (segmentation is not implemented).
+
+    Mode 1 additionally repeats ``Nrepeat = 2*floor(C*Nouter) + D`` parity bits
+    (A/322 6.5.2.7, Table 6.23); the transmitted word is ``Nfec + Nrepeat``
+    bits.  Every other mode has ``Nrepeat = 0``.
     """
     m = L1D_MODES[mode]
     if ksig > m.kseg:
@@ -384,10 +400,17 @@ def l1d_lengths(mode: int, ksig: int) -> L1DetailLengths:
     n_fec_tmp = nouter + m.n_ldpc_parity - n_punc_tmp
     n_fec = (n_fec_tmp // m.eta) * m.eta
     n_punc = n_punc_tmp - (n_fec_tmp - n_fec)
+    n_repeat = 0
+    if m.repeat_c_den:
+        n_repeat = 2 * int(m.repeat_c_num * nouter // m.repeat_c_den) \
+            + m.repeat_d
+        n_repeat = max(n_repeat, 0)
+    n_tx = n_fec + n_repeat
     return L1DetailLengths(
         mode=mode, ksig=ksig, nouter=nouter, kldpc=m.kldpc, ninner=L1B_NINNER,
-        eta=m.eta, n_fec=n_fec, n_parity_kept=n_fec - nouter, n_punc=n_punc,
-        n_cells=n_fec // m.eta, rate=m.rate)
+        eta=m.eta, n_fec=n_fec, n_tx=n_tx,
+        n_parity_kept=n_fec - nouter, n_punc=n_punc, n_repeat=n_repeat,
+        n_cells=n_tx // m.eta, rate=m.rate)
 
 
 # ===========================================================================

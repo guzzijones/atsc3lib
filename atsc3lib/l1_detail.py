@@ -33,6 +33,39 @@ NINNER = spec.L1B_NINNER
 scramble_bits = sf.scramble_bits
 
 
+def preamble_block_deinterleave(cells: np.ndarray, n_symbols: int) -> np.ndarray:
+    """Invert the A/322 7.2.5.2 L1-Detail Preamble block interleaver.
+
+    L1-Detail's ``L1B_L1_Detail_total_cells`` cells are spread across ``NP``
+    Preamble symbols by a block interleaver with ``Lc = NP`` columns and
+    ``Lr = floor(total/NP)`` rows: the first ``Lc*Lr`` cells are written
+    row-wise and read out column-wise (``y(i*Lr+j) = M(j*Lc+i)``), and any
+    remainder is appended unchanged.  This returns ``M`` (the pre-interleaver
+    order), which is what the L1-Detail FEC chain expects.
+
+    Args:
+        cells: The received L1-Detail cells ``y`` in mapping order (first
+            Preamble symbol's non-L1-Basic cells, then later symbols).
+        n_symbols: NP, the number of Preamble symbols.
+
+    Returns:
+        The de-interleaved cells ``M``.
+    """
+    y = np.asarray(cells)
+    total = len(y)
+    lr = total // n_symbols
+    full = n_symbols * lr
+    out = np.empty(total, dtype=y.dtype)
+    if full:
+        m = np.arange(full)
+        i = m % n_symbols
+        j = m // n_symbols
+        out[m] = y[i * lr + j]
+    if total > full:
+        out[full:] = y[full:]
+    return out
+
+
 class L1DetailCodec:
     """Encode/decode one L1-Detail FEC frame for a given mode.
 
@@ -75,8 +108,9 @@ class L1DetailCodec:
         self.n_fec = g.n_fec
         self.n_parity_kept = g.n_parity_kept
         self.n_punc = g.n_punc
+        self.n_repeat = g.n_repeat
         self.n_cells = g.n_cells
-        self.n_tx = self.n_fec  # Mode 1 repetition not handled for L1-Detail
+        self.n_tx = g.n_tx
 
     def _parity_positions(self) -> np.ndarray:
         """Clean-codeword parity positions in TRANSMISSION order.
@@ -110,13 +144,17 @@ class L1DetailCodec:
         codeword = self.ldpc.encode(info)
 
         permuted = codeword[self._parity_pos]
-        return np.concatenate([nouter, permuted[:self.n_parity_kept]])
+        parts = [nouter]
+        if self.n_repeat:
+            parts.append(permuted[:self.n_repeat])
+        parts.append(permuted[:self.n_parity_kept])
+        return np.concatenate(parts)
 
     # --- decode ----------------------------------------------------------
     def cells_to_llr(self, cells: np.ndarray) -> np.ndarray:
         """QPSK demap (Annex C.1.1) + 6.5.2.10 block de-interleave."""
         z = np.asarray(cells)
-        ncells = self.n_fec // self.eta
+        ncells = self.n_tx // self.eta
         z = z[:ncells].astype(np.complex128)
         if not len(z):
             return np.zeros(self.n_tx, dtype=np.float64)
@@ -126,7 +164,7 @@ class L1DetailCodec:
         k = 4.0 / n0
         llr_y0 = -k * z.imag
         llr_y1 = -k * z.real
-        return np.concatenate([llr_y0, llr_y1])[:self.n_fec]
+        return np.concatenate([llr_y0, llr_y1])[:self.n_tx]
 
     def decode(self, llrs: np.ndarray, known_llr: float = 60.0
                ) -> Tuple[np.ndarray, bool, bool]:
@@ -143,8 +181,18 @@ class L1DetailCodec:
         codeword = np.zeros(NINNER, dtype=np.float64)
         codeword[:self.Kldpc][self._padded] = -known_llr
         codeword[self._info_pos] = llrs[:self.Nouter]
+
+        # A/322 6.5.2.9: [info][repeated parity][punctured tail].  The repeat
+        # block and the tail start at the same permuted-parity position, so
+        # their LLRs add (6.5.2.7 Step 2).
+        o = self.Nouter
+        if self.n_repeat:
+            n_rep = min(self.n_repeat, self._parity_pos.size)
+            np.add.at(codeword, self._parity_pos[:n_rep],
+                      llrs[o:o + n_rep])
+            o += n_rep
         np.add.at(codeword, self._parity_pos[:self.n_parity_kept],
-                  llrs[self.Nouter:self.n_fec])
+                  llrs[o:o + self.n_parity_kept])
 
         decoded, converged = self.ldpc.decode(codeword)
         nouter = decoded[self._info_pos]

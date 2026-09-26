@@ -71,7 +71,14 @@ class L1BasicCodec:
 
     # --- encode ----------------------------------------------------------
     def encode(self, info_bits: np.ndarray) -> np.ndarray:
-        """Encode 200 L1-Basic info bits into the transmitted bit sequence."""
+        """Encode 200 L1-Basic info bits into the transmitted bit sequence.
+
+        A/322 6.5.2.7/6.5.2.9: for Mode 1 the transmitted word is
+        ``[Nouter info+BCH][Nrepeat repeated parity][Nfec - Nouter tail]``; the
+        repeat block carries the FIRST ``Nrepeat`` permuted parity bits, which
+        are also the first ``Nfec - Nouter`` bits of the tail.  Other modes
+        have ``Nrepeat = 0`` and reduce to ``[info][tail]``.
+        """
         if len(info_bits) != KSIG_L1_BASIC:
             raise ValueError(f"Expected {KSIG_L1_BASIC} bits")
 
@@ -84,12 +91,12 @@ class L1BasicCodec:
 
         # Group-wise permuted parity, in transmission order.
         permuted = codeword[_PARITY_POS]
-        n_base_parity = self.n_fec - NOUTER
-        base = np.concatenate([nouter, permuted[:n_base_parity]])
-
+        n_tail = self.n_fec - NOUTER
+        parts = [nouter]
         if self.n_repeat:
-            base = np.concatenate([base, permuted[:self.n_repeat]])
-        return base
+            parts.append(permuted[:self.n_repeat])
+        parts.append(permuted[:n_tail])
+        return np.concatenate(parts)
 
     # --- decode ----------------------------------------------------------
     def cells_to_llr(self, cells: np.ndarray) -> np.ndarray:
@@ -97,7 +104,7 @@ class L1BasicCodec:
 
         Annex C.1.1 maps bits (y0, y1) as 00->(1+j), 01->(-1+j),
         10->(+1-j), 11->(-1-j), so y1 sets the sign of I and y0 the sign of Q.
-        6.5.2.10 writes the NFEC bits into a 2-column block interleaver
+        6.5.2.10 writes the NFEC+Nrepeat bits into a 2-column block interleaver
         column-wise and reads row-wise, so the symbol stream carries all y0
         bits first, then all y1 bits.
 
@@ -105,7 +112,7 @@ class L1BasicCodec:
         order, ready for :meth:`decode`.
         """
         z = np.asarray(cells)
-        ncells = self.n_fec // self.eta
+        ncells = self.n_tx // self.eta
         z = z[:ncells].astype(np.complex128)
         if not len(z):
             return np.zeros(self.n_tx, dtype=np.float64)
@@ -117,7 +124,7 @@ class L1BasicCodec:
         llr_y0 = -k * z.imag
         llr_y1 = -k * z.real
         # 6.5.2.10 block interleaver: column 0 = y0, column 1 = y1.
-        return np.concatenate([llr_y0, llr_y1])[:self.n_fec]
+        return np.concatenate([llr_y0, llr_y1])[:self.n_tx]
 
     def decode_cells(self, cells: np.ndarray) -> Tuple[np.ndarray, bool]:
         """Demap QPSK cells (with block de-interleave) and decode."""
@@ -147,16 +154,18 @@ class L1BasicCodec:
         codeword[:KLD_PC][_PADDED] = -known_llr
         codeword[_INFO_POS] = llrs[:NOUTER]
 
-        # Scatter the received parity bits onto their codeword positions.
-        n_base_parity = self.n_fec - NOUTER
-        np.add.at(codeword, _PARITY_POS[:n_base_parity],
-                  llrs[NOUTER:self.n_fec])
-
-        # Repetition (Mode 1) adds onto the SAME parity positions.
+        # A/322 6.5.2.9: [info][repeated parity][punctured tail].  The repeated
+        # block and the tail start at the SAME permuted-parity position, so
+        # their LLRs add (6.5.2.7 Step 2).
+        o = NOUTER
         if self.n_repeat:
             n_rep = min(self.n_repeat, _PARITY_POS.size)
             np.add.at(codeword, _PARITY_POS[:n_rep],
-                      llrs[self.n_fec:self.n_fec + n_rep])
+                      llrs[o:o + n_rep])
+            o += n_rep
+        n_base_parity = self.n_fec - NOUTER
+        np.add.at(codeword, _PARITY_POS[:n_base_parity],
+                  llrs[o:o + n_base_parity])
 
         decoded, converged = self.ldpc.decode(codeword)
         nouter = decoded[_INFO_POS]

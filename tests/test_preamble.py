@@ -51,6 +51,24 @@ class TestDataMask:
         assert not np.any(mask[preamble_pilot_indices(6529, 4)])
         assert not np.any(mask[common_continual_pilots(6529)])
 
+    @pytest.mark.parametrize('gi,row', [
+        (192, [6432, 6342, 6253, 6164, 6075]),
+        (384, [6000, 5916, 5833, 5750, 5667]),
+        (512, [5712, 5632, 5553, 5474, 5395]),
+        (768, [5136, 5064, 4993, 4922, 4851]),
+        (1024, [4560, 4496, 4433, 4370, 4307]),
+        (1536, [5136, 5064, 4993, 4922, 4851]),
+        (2048, [4560, 4496, 4433, 4370, 4307]),
+    ])
+    def test_all_creds_match_table_7_2(self, gi, row):
+        """Later Preamble symbols use L1B_preamble_reduced_carriers (0..4)."""
+        struct = {192: 2, 384: 7, 512: 12, 768: 17,
+                  1024: 22, 1536: 27, 2048: 32}[gi]
+        dx = spec.PREAMBLE_STRUCTURE[struct].dx
+        got = [int(preamble_data_mask(spec.noc(8192, c), dx).sum())
+               for c in range(5)]
+        assert got == row
+
 
 class TestPilotValues:
     def test_pilot_values_are_bpsk(self):

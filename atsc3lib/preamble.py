@@ -42,6 +42,16 @@ def preamble_noc(fft_size: int) -> int:
     return spec.noc(fft_size, spec.PREAMBLE_FIRST_CRED)
 
 
+def preamble_noc_later(fft_size: int, cred_coeff: int) -> int:
+    """Number of carriers in a Preamble symbol after the first.
+
+    The first Preamble symbol uses the cred_coeff = 4 count; every later
+    Preamble symbol uses ``L1B_preamble_reduced_carriers`` (A/322 7.2.5,
+    9.2.2).
+    """
+    return spec.noc(fft_size, cred_coeff)
+
+
 def decode_preamble_structure(preamble_structure: int) -> spec.PreambleStructure:
     """Look up a ``preamble_structure`` value (A/322 Table H.1.1)."""
     if preamble_structure not in spec.PREAMBLE_STRUCTURE:
@@ -145,6 +155,38 @@ def preamble_data_cells(carriers: np.ndarray, channel: np.ndarray,
     return equalized[preamble_data_mask(len(carriers), dx)]
 
 
+def preamble_symbol_cells(symbol_time: np.ndarray, preamble_structure: int,
+                          fi_index: int, cred_coeff: int,
+                          noc: int = None) -> np.ndarray:
+    """Demodulate any Preamble symbol: FFT -> equalize -> frequency deinterleave.
+
+    The first Preamble symbol uses ``cred_coeff = 4`` and ``fi_index = 0``;
+    later Preamble symbols use ``L1B_preamble_reduced_carriers`` and their
+    frame symbol index (A/322 7.2.5.1).  All Preamble symbols share the FFT,
+    guard interval and pilot pattern signalled by the bootstrap.
+
+    Args:
+        symbol_time: The FFT-length time samples (guard interval removed).
+        preamble_structure: The value decoded from the bootstrap.
+        fi_index: The frequency-interleaver symbol counter for this symbol
+            (frame symbol index, 0-based).
+        cred_coeff: Carrier-reduction coefficient for this symbol.
+        noc: Carrier count; defaults to ``spec.noc(fft, cred_coeff)``.
+
+    Returns:
+        The frequency-deinterleaved data cells of the symbol.
+    """
+    params = decode_preamble_structure(preamble_structure)
+    fft_size, gi, dx = params.fft, params.gi, params.dx
+    if noc is None:
+        noc = spec.noc(fft_size, cred_coeff)
+    carriers = preamble_symbol_spectrum(symbol_time, fft_size, noc=noc)
+    amplitude = spec.PREAMBLE_PILOT_AMPLITUDE[(fft_size, gi)]
+    channel = estimate_preamble_channel(carriers, dx, amplitude)
+    data = preamble_data_cells(carriers, channel, dx)
+    return fi_deinterleave(data, fi_index, fft_size)
+
+
 def preamble_l1_cells(symbol_time: np.ndarray, preamble_structure: int) -> Tuple[np.ndarray, dict]:
     """Full front-end for the first Preamble symbol: FFT -> equalize -> deinterleave.
 
@@ -157,10 +199,7 @@ def preamble_l1_cells(symbol_time: np.ndarray, preamble_structure: int) -> Tuple
         cells ready for QPSK demapping, and ``params`` is the Table H.1.1 row.
     """
     params = decode_preamble_structure(preamble_structure)
-    fft_size, gi, dx = params.fft, params.gi, params.dx
-    noc = preamble_noc(fft_size)
-    carriers = preamble_symbol_spectrum(symbol_time, fft_size, noc=noc)
-    amplitude = spec.PREAMBLE_PILOT_AMPLITUDE[(fft_size, gi)]
-    channel = estimate_preamble_channel(carriers, dx, amplitude)
-    data = preamble_data_cells(carriers, channel, dx)
-    return fi_deinterleave(data, 0, fft_size), params
+    cells = preamble_symbol_cells(
+        symbol_time, preamble_structure, fi_index=0,
+        cred_coeff=spec.PREAMBLE_FIRST_CRED, noc=preamble_noc(params.fft))
+    return cells, params

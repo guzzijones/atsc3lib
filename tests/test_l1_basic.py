@@ -7,6 +7,7 @@ from atsc3lib.l1_basic import (
     L1BasicCodec, scramble_bits, KSIG_L1_BASIC, NOUTER, KLD_PC,
     L1_BASIC_MODES, _randomizer_bits,
 )
+from atsc3lib import spec
 
 
 class TestRandomizer:
@@ -38,6 +39,30 @@ class TestCodecConstruction:
         for mode, cells in expected_cells.items():
             codec = L1BasicCodec(mode, max_iterations=15)
             assert codec.n_tx // codec.eta == cells
+
+    def test_mode1_repetition_geometry(self):
+        # A/322 Table 6.23: L1-Basic Mode 1 repeats 2*floor(0*Nouter)+3672
+        # parity bits; the transmitted word is [info][repeat][tail], length
+        # Nfec + Nrepeat = 7640 bits = 3820 cells (Table 6.17).
+        lengths = spec.l1b_lengths(1)
+        assert lengths.n_repeat == 3672
+        assert lengths.n_fec == 3968
+        assert lengths.n_tx == 7640
+        assert lengths.n_cells == 3820
+
+    def test_mode1_repeat_bits_are_parity_head(self):
+        codec = L1BasicCodec(1, max_iterations=15)
+        rng = np.random.default_rng(7)
+        info = rng.integers(0, 2, KSIG_L1_BASIC, dtype=np.uint8)
+        tx = codec.encode(info)
+        # The repeated block is the FIRST Nrepeat permuted-parity bits; the
+        # tail is the first (Nfec - Nouter) of the SAME stream (6.5.2.7 Step
+        # 2), so they agree over the shorter tail length.
+        n_tail = codec.n_fec - NOUTER
+        repeat = tx[NOUTER:NOUTER + codec.n_repeat]
+        tail = tx[NOUTER + codec.n_repeat:NOUTER + codec.n_repeat + n_tail]
+        assert n_tail < codec.n_repeat
+        assert np.array_equal(repeat[:n_tail], tail)
 
     def test_mode1_repeats(self):
         assert L1BasicCodec(1).n_repeat == 3672

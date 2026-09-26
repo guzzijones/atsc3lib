@@ -1,0 +1,15 @@
+{
+  "preamble_structure": 25,
+  "fft": 8192,
+  "gi": 1536,
+  "boot_span": 13824,
+  "l1b_mode": 1,
+  "l1b_cells": 3820,
+  "preamble_num_symbols": 2,
+  "preamble_reduced_carriers": 0,
+  "l1_detail_total_cells": 3708,
+  "l1_detail_size_bytes": 44,
+  "l1_detail_fec_type": 0,
+  "detail_bch_ok": true,
+  "detail_crc_ok": true
+}

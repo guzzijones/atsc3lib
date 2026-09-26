@@ -314,11 +314,20 @@ def build_cell_pool(y: np.ndarray, t0: int, fft_size: int, guard_interval: int,
                     noc: int, dx: int, dy: int, n_data_symbols: int,
                     sbs_symbols=(0,), preamble_structure: int = 27,
                     l1_cells: int = 484 + 880,
-                    pattern: str = None, sbs_null: int = None) -> CellPool:
+                    pattern: str = None, sbs_null: int = None,
+                    preamble_num_symbols: int = 1,
+                    preamble_reduced_carriers: int = spec.PREAMBLE_FIRST_CRED,
+                    l1b_cells: int = None) -> CellPool:
     """Build the subframe-0 cell pool: Preamble spare cells + data symbols.
 
-    Uses :func:`build_data_symbol_pool` for the data symbols with the
-    frequency-interleaver counter origin 1 (the Preamble is frame symbol 0).
+    The first Preamble symbol carries L1-Basic at its start and L1-Detail after
+    it; any later Preamble symbols carry the rest of L1-Detail (A/322 7.2.5.2).
+    ``l1_cells`` is the number of cells consumed by signalling in the *first*
+    Preamble symbol; the spare (PLP-available) cells are whatever is left in the
+    last Preamble symbol.  Subframe-0 data symbols begin after all Preamble
+    symbols, and the frequency-interleaver counter continues from the Preamble
+    (the first Preamble symbol is frame symbol 0), so the first data symbol's
+    counter origin is ``preamble_num_symbols``.
 
     Args:
         y: Main-rate IQ starting at the bootstrap (sample 0).
@@ -328,9 +337,15 @@ def build_cell_pool(y: np.ndarray, t0: int, fft_size: int, guard_interval: int,
         n_data_symbols: Number of symbols in the subframe (data + SBS).
         sbs_symbols: Indices that are subframe boundary symbols.
         preamble_structure: Bootstrap-decoded structure (for the preamble).
-        l1_cells: Number of Preamble cells consumed by L1-Basic + L1-Detail.
+        l1_cells: Cells consumed by L1-Basic + L1-Detail in the first Preamble
+            symbol (used when ``l1b_cells`` is None).
         pattern: Scattered-pilot pattern name; defaults to 8K SP4_2.
         sbs_null: Null cells per subframe boundary symbol; 8K cred-0 default.
+        preamble_num_symbols: NP, the number of Preamble symbols.
+        preamble_reduced_carriers: L1B_preamble_reduced_carriers, the
+            cred_coeff used by the Preamble symbols after the first.
+        l1b_cells: Number of L1-Basic cells at the start of the first Preamble
+            symbol (used to locate L1-Detail); None falls back to ``l1_cells``.
 
     Returns:
         CellPool for the subframe.
@@ -339,21 +354,48 @@ def build_cell_pool(y: np.ndarray, t0: int, fft_size: int, guard_interval: int,
         preamble_symbol_spectrum, estimate_preamble_channel,
         preamble_data_cells, preamble_noc)
 
-    # Preamble spare cells.
     pre = spec.PREAMBLE_STRUCTURE[preamble_structure]
+
+    # First Preamble symbol: cred-4 carriers, FI counter 0.
     sym_pre = y[t0 + pre.gi:t0 + pre.gi + pre.fft]
     carriers = preamble_symbol_spectrum(sym_pre, pre.fft,
                                         noc=preamble_noc(pre.fft))
     h_pre = estimate_preamble_channel(
         carriers, pre.dx, spec.PREAMBLE_PILOT_AMPLITUDE[(pre.fft, pre.gi)])
-    xp = fi_deinterleave(preamble_data_cells(carriers, h_pre, pre.dx), 0,
+    x0 = fi_deinterleave(preamble_data_cells(carriers, h_pre, pre.dx), 0,
                          pre.fft)
-    spare = xp[l1_cells:]
+
+    if preamble_num_symbols <= 1:
+        spare = x0[l1_cells:]
+        data_start = t0 + (pre.fft + pre.gi)
+    else:
+        # L1-Detail fills the first symbol after L1-Basic, then the later
+        # Preamble symbols; the leftover of the LAST is spare for PLP data.
+        n_l1b = l1_cells if l1b_cells is None else l1b_cells
+        remaining = l1_cells - n_l1b
+        sym0_detail = min(len(x0) - n_l1b, remaining)
+        remaining -= sym0_detail
+        spare = np.empty(0, dtype=x0.dtype)
+        for k in range(1, preamble_num_symbols):
+            start = t0 + (pre.fft + pre.gi) * k + pre.gi
+            body = y[start:start + pre.fft].astype(np.complex128)
+            n_sym = spec.noc(pre.fft, preamble_reduced_carriers)
+            ck = preamble_symbol_spectrum(body, pre.fft, noc=n_sym)
+            hk = estimate_preamble_channel(
+                ck, pre.dx, spec.PREAMBLE_PILOT_AMPLITUDE[(pre.fft, pre.gi)])
+            xk = fi_deinterleave(
+                preamble_data_cells(ck, hk, pre.dx), k, pre.fft)
+            if k == preamble_num_symbols - 1:
+                used = min(len(xk), remaining)
+                spare = xk[used:]
+            else:
+                remaining -= min(len(xk), remaining)
+        data_start = t0 + (pre.fft + pre.gi) * preamble_num_symbols
 
     data = build_data_symbol_pool(
-        y, t0 + (pre.fft + pre.gi), fft_size, guard_interval, noc, dx, dy,
+        y, data_start, fft_size, guard_interval, noc, dx, dy,
         n_data_symbols, sbs_symbols=sbs_symbols, pattern=pattern or 'SP4_2',
-        sbs_null=sbs_null, fi_offset=1)
+        sbs_null=sbs_null, fi_offset=preamble_num_symbols)
 
     return CellPool(cells=np.concatenate([spare, data.cells]),
                     symbol_of=np.concatenate([
@@ -446,13 +488,19 @@ def decode_subframe0_plp(y: np.ndarray, t0: int, fft_size: int,
                          n_data_symbols: int, sbs_symbols,
                          preamble_structure: int, l1_cells: int,
                          plp, max_iterations: int = 100,
-                         pattern: str = None, sbs_null: int = None) -> PlpPayload:
+                         pattern: str = None, sbs_null: int = None,
+                         preamble_num_symbols: int = 1,
+                         preamble_reduced_carriers: int = spec.PREAMBLE_FIRST_CRED,
+                         l1b_cells: int = None) -> PlpPayload:
     """Decode one PLP of subframe 0 from its L1-Detail ``plp`` config."""
     pool = build_cell_pool(y, t0, fft_size, guard_interval, noc, dx, dy,
                            n_data_symbols, sbs_symbols=sbs_symbols,
                            preamble_structure=preamble_structure,
                            l1_cells=l1_cells, pattern=pattern,
-                           sbs_null=sbs_null)
+                           sbs_null=sbs_null,
+                           preamble_num_symbols=preamble_num_symbols,
+                           preamble_reduced_carriers=preamble_reduced_carriers,
+                           l1b_cells=l1b_cells)
     return decode_plp_from_pool(pool, plp, max_iterations=max_iterations)
 
 
