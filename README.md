@@ -83,9 +83,9 @@ The library is hardware-agnostic: it consumes raw IQ samples from any source.
 ## Payload limitations
 
 The payload chain supports Ninner = 16200 (short frames) only, and the
-tabulated QPSK/16QAM/64QAM/256QAM MODCODs.  The A/322 7.1.5.2 HTI **cell**
-interleaver (`L1D_plp_HTI_cell_interleaver = 1`) is not implemented; TI mode 2
-with cell interleaving disabled, and TI modes 0/1, are supported.
+tabulated QPSK/16QAM/64QAM/256QAM MODCODs.  TI mode 2 supports the A/322
+7.1.5.4 twisted block interleaver and the optional A/322 7.1.5.2 **cell**
+interleaver (`L1D_plp_HTI_cell_interleaver`); TI modes 0/1 are supported.
 
 PLP 0 (64QAM-NUC 11/15) of the RF33 multiplex sits at the ~18.8 dB AWGN
 threshold and the available captures measure ~15.9 dB MER, so it does not

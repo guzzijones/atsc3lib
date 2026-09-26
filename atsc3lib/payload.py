@@ -33,6 +33,7 @@ from .group_interleaver import GroupInterleaver
 from .ldpc_exact import ATSC3LDPCExact
 from .pilot_reference import reference_sequence
 from .signaling_fec import scramble_bits
+from .cell_interleaver import CellInterleaver
 from . import twisted_block
 
 
@@ -374,9 +375,11 @@ def decode_data_plp(cells: np.ndarray, mod: str, rate: int, nti: int = 1,
 
     ``cells`` is the PLP's ``plp_size`` cells in cell order.  When TI mode is
     2 (HTI), the cells pass through the A/322 7.1.5.4 twisted block
-    interleaver (``nrows = cells_per_fec``, ``ncols = n_fec``) before each FEC
-    block is decoded.  ``NTI`` (``hti_num_ti_blocks + 1``) splits the slice
-    into independent interleaving frames.
+    interleaver (``nrows = cells_per_fec``, ``ncols = n_fec``) and, if
+    signalled, the A/322 7.1.5.2 cell interleaver before each FEC block is
+    decoded.  ``NTI`` (``hti_num_ti_blocks + 1``) splits the slice into
+    independent interleaving frames; the cell interleaver's permutation resets
+    at each TI block.
 
     Args:
         cells: PLP cells in cell order.
@@ -384,12 +387,8 @@ def decode_data_plp(cells: np.ndarray, mod: str, rate: int, nti: int = 1,
         rate: LDPC code rate numerator over 15.
         nti: Number of TI blocks (1 for no sub-frame division).
         n_fec: Total FEC blocks; derived from ``cells`` if omitted.
-        cell_interleaver: A/322 7.1.5.2 HTI cell interleaver flag (not yet
-            implemented; only 0 is supported).
+        cell_interleaver: A/322 7.1.5.2 HTI cell interleaver flag.
     """
-    if cell_interleaver:
-        raise NotImplementedError(
-            "HTI cell interleaver (A/322 7.1.5.2) not implemented")
     chain = DataPlpChain(mod=mod, rate=rate, max_iterations=max_iterations)
     cpf = chain.cells_per_fec
     plp_id = -1
@@ -397,15 +396,14 @@ def decode_data_plp(cells: np.ndarray, mod: str, rate: int, nti: int = 1,
         n_fec = len(cells) // cpf
     per_ti = len(cells) // nti
     ncols = n_fec // nti
+
     blocks = []
-    if nti == 1:
-        for j in range(n_fec):
-            block = twisted_block.fec_block(cells, j, cpf, ncols)
-            blocks.append(chain.decode_cells(block))
-    else:
-        for ti in range(nti):
-            seg = cells[ti * per_ti:(ti + 1) * per_ti]
-            for j in range(ncols):
-                block = twisted_block.fec_block(seg, j, cpf, ncols)
-                blocks.append(chain.decode_cells(block))
+    ci = CellInterleaver(cpf) if cell_interleaver else None
+    for ti in range(nti):
+        seg = cells[ti * per_ti:(ti + 1) * per_ti]
+        mem = np.stack([twisted_block.fec_block(seg, j, cpf, ncols)
+                        for j in range(ncols)])
+        if ci is not None:
+            mem = ci.deinterleave(mem)
+        blocks.extend(chain.decode_cells(mem[j]) for j in range(ncols))
     return PlpPayload(plp_id=plp_id, fec_blocks=blocks, n_fec=n_fec)

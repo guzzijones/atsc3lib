@@ -50,6 +50,7 @@ from .group_interleaver import GroupInterleaver
 from .prbs_descrambler import PRBSDescrambler, BitScrambler
 from . import nuc
 from . import twisted_block
+from . import cell_interleaver
 from . import signaling_fec
 
 # Signalling
@@ -120,6 +121,7 @@ __all__ = [
     "signaling_fec",
     "nuc",
     "twisted_block",
+    "cell_interleaver",
     # signalling
     "L1SignalingParser",
     "parse_l1_basic",

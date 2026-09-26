@@ -1,0 +1,10 @@
+{
+ "mod": "64QAM",
+ "rate": 11,
+ "nti": 2,
+ "n_fec": 6,
+ "cells_per_fec": 2700,
+ "kpayload": 11712,
+ "source": "oracle m6_bicm+m6_tbi, TX cell-interleaved",
+ "cell_interleaver": 1
+}
