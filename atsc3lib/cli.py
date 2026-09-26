@@ -80,6 +80,7 @@ def decode_main(argv=None):
 
     if not args.no_payload:
         from .frontend import read_hackrf_iq
+        from .payload import decode_streams
         iq = read_hackrf_iq(args.file)
         _, payload = decode_plp_payload(
             iq, args.rate, plp_id=args.plp,
@@ -89,8 +90,15 @@ def decode_main(argv=None):
         else:
             print(f"  Payload: PLP {payload.plp_id}, "
                   f"{payload.n_converged}/{payload.n_fec} FEC blocks converged")
-            for pkt in payload.baseband_packets[:4]:
-                print(f"    Baseband Packet: {len(pkt)} bytes")
+            streams = decode_streams(payload)
+            print(f"  Streams: {len(streams.packets)} ALP packet(s), "
+                  f"{len(streams.datagrams)} UDP datagram(s), "
+                  f"{len(streams.lls)} LLS table(s)")
+            for t in streams.lls:
+                print(f"    LLS table 0x{t.table_id:02x} ({t.name}): "
+                      f"{len(t.data)} bytes")
+            if streams.alp_stats.resync:
+                print(f"    (ALP resyncs: {streams.alp_stats.resync})")
     return 0
 
 

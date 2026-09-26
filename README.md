@@ -13,11 +13,13 @@ Implements, from the A/322 specification:
 - L1-Basic and L1-Detail FEC (BCH + LDPC) and field parsing
 - **Per-PLP configuration** decoded from L1-Detail
 - **Data-PLP payload chain**: NUC/QAM demap, bit de-interleave, HTI twisted
-  block de-interleave, LDPC/BCH, descramble to Baseband Packets
+  block de-interleave and cell interleaver, LDPC/BCH, descramble to Baseband
+  Packets
+- **Link/network layer**: A/322 5.2.2 Baseband Packet headers, A/330 ALP
+  de-encapsulation (single / segmentation / concatenation / signalling),
+  IPv4 fragment reassembly and UDP, A/331 Low-Level Signaling
 
-Validated against real off-air captures and an independent receiver.  The
-Baseband-Packet stream is the input to the A/330 ALP/IP layer, which is the
-next rung.
+Validated against real off-air captures and an independent receiver.
 
 ## Installation
 
@@ -57,19 +59,25 @@ Capture: out/capture.iq @ 10.000 MHz
 ## Python API
 
 ```python
-from atsc3lib import decode_capture, decode_plp_payload
+from atsc3lib import decode_capture, decode_plp_streams
 
 result = decode_capture('out/capture.iq', fs_main=10e6, fmt='cs8')
 if result.l1_detail_ok:
     for subframe, plp in result.plps:
         print(subframe, plp.plp_id, plp.modulation, plp.code_rate)
 
-# Decode a subframe-0 PLP payload to Baseband Packets
+# Decode a subframe-0 PLP through to ALP/UDP/LLS
 iq = ...  # the same capture IQ
-result, payload = decode_plp_payload(iq, fs_main=10e6, plp_id=16, result=result)
-for packet in payload.baseband_packets:
+result, streams = decode_plp_streams(iq, fs_main=10e6, plp_id=16, result=result)
+for table in streams.lls:
+    print(table.name, len(table.data))
+for datagram in streams.datagrams:
     ...
 ```
+
+Raw Baseband Packet bytes remain available from `decode_plp_payload` ->
+`PlpPayload.baseband_packets`; `payload.decode_streams` runs the link layer on
+them alone.
 
 ## Supported Hardware
 
@@ -79,6 +87,14 @@ for packet in payload.baseband_packets:
 - **Any SoapySDR device**
 
 The library is hardware-agnostic: it consumes raw IQ samples from any source.
+
+## Link-layer limitations
+
+The A/330 layer implements Base Headers, single/segmentation/concatenation
+payloads, the type-specific and Extension Headers, IPv4 fragment reassembly
+and UDP, and LLS table extraction.  ROHC header decompression (A/330 §6,
+compressed-IP `packet_type = 010`) is not implemented, so compressed streams
+are surfaced as raw ALP packets rather than decompressed datagrams.
 
 ## Payload limitations
 

@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from atsc3lib.receiver import decode_signaling, decode_plp_payload
+from atsc3lib.payload import decode_streams
 
 _DATA = os.path.join(os.path.dirname(__file__), 'data')
 _SLICE = os.path.join(_DATA, 'rf33_acquire_slice.npy')
@@ -39,3 +40,17 @@ def test_live_plp16_payload_matches_oracle():
     assert len(packets) == 1
     if os.path.exists(_BB):
         assert packets[0] == open(_BB, 'rb').read()
+
+
+def test_live_plp16_bbp_header_and_streams():
+    # PLP-16's one Baseband Packet is padding-only (no ALP starts): this gates
+    # the A/322 5.2.2 header parse and the A/330 ALP walk on real air.
+    iq = np.load(_SLICE)
+    result = decode_signaling(iq, 10e6)
+    result, payload = decode_plp_payload(iq, 10e6, result=result)
+    assert payload is not None
+    streams = decode_streams(payload)
+    assert streams.packets == []
+    assert streams.datagrams == []
+    assert streams.alp_stats.resync == 0
+    assert streams.alp_stats.single == 0

@@ -8,9 +8,12 @@ This is the canonical receive path, exercised end to end on real air.  It runs:
          frequency-deinterleave                              (preamble)
       -> L1-Basic FEC decode + parse                       (l1_basic, l1_signaling)
       -> L1-Detail FEC decode + parse -> per-PLP config     (l1_detail, l1_signaling)
+      -> PLP FEC -> Baseband Packets                        (payload)
+      -> ALP -> IPv4/UDP -> Low-Level Signaling             (baseband, alp, ip)
 
-The payload chain (PLP -> ALP -> IP) is not implemented yet; this stops at the
-per-PLP configuration decoded from L1-Detail.
+:func:`decode_capture` stops at the per-PLP configuration; :func:`decode_plp_payload`
+and :func:`decode_plp_streams` extend the chain through the payload and the
+link/network layers.
 """
 
 from dataclasses import dataclass, field
@@ -235,3 +238,22 @@ def decode_first_plp_payload(iq_main: np.ndarray, fs_main: float,
     """
     return decode_plp_payload(iq_main, fs_main, plp_id=None,
                               max_iterations=max_iterations, result=result)
+
+
+def decode_plp_streams(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
+                       max_iterations: int = 100, result=None):
+    """Decode one PLP all the way to network-layer streams.
+
+    Runs :func:`decode_plp_payload` and then Baseband Packets -> ALP -> IPv4/6
+    -> UDP -> Low-Level Signaling (A/322 5.2, A/330 5, A/331 6.1).  Returns
+    ``(result, streams)`` with ``streams`` a
+    :class:`~atsc3lib.payload.DecodedStreams` or None.
+    """
+    from .payload import decode_streams
+
+    result, payload = decode_plp_payload(
+        iq_main, fs_main, plp_id=plp_id, max_iterations=max_iterations,
+        result=result)
+    if payload is None:
+        return result, None
+    return result, decode_streams(payload)

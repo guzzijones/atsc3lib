@@ -51,6 +51,9 @@ from .prbs_descrambler import PRBSDescrambler, BitScrambler
 from . import nuc
 from . import twisted_block
 from . import cell_interleaver
+from . import baseband
+from . import alp
+from . import ip
 from . import signaling_fec
 
 # Signalling
@@ -65,13 +68,13 @@ from .l1_detail import L1DetailCodec
 from .payload import (
     QPSKPlpChain, DataPlpChain, build_cell_pool, data_symbol_cells,
     qpsk_demap_llr, CellPool, QPSK_POINTS, PlpPayload,
-    decode_subframe0_qpsk_plp,
+    decode_subframe0_qpsk_plp, DecodedStreams, decode_streams,
 )
 
 # Receiver (full chain)
 from .receiver import (
     decode_signaling, decode_capture, ReceiverResult,
-    decode_first_plp_payload, decode_plp_payload,
+    decode_first_plp_payload, decode_plp_payload, decode_plp_streams,
 )
 
 __all__ = [
@@ -122,6 +125,9 @@ __all__ = [
     "nuc",
     "twisted_block",
     "cell_interleaver",
+    "baseband",
+    "alp",
+    "ip",
     # signalling
     "L1SignalingParser",
     "parse_l1_basic",
@@ -142,12 +148,15 @@ __all__ = [
     "QPSK_POINTS",
     "PlpPayload",
     "decode_subframe0_qpsk_plp",
+    "DecodedStreams",
+    "decode_streams",
     # receiver
     "decode_signaling",
     "decode_capture",
     "ReceiverResult",
     "decode_first_plp_payload",
     "decode_plp_payload",
+    "decode_plp_streams",
     # modules
     "spec",
     "crc",

@@ -34,6 +34,9 @@ from .ldpc_exact import ATSC3LDPCExact
 from .pilot_reference import reference_sequence
 from .signaling_fec import scramble_bits
 from .cell_interleaver import CellInterleaver
+from . import baseband
+from . import alp
+from . import ip as ip_layer
 from . import twisted_block
 
 
@@ -407,3 +410,45 @@ def decode_data_plp(cells: np.ndarray, mod: str, rate: int, nti: int = 1,
             mem = ci.deinterleave(mem)
         blocks.extend(chain.decode_cells(mem[j]) for j in range(ncols))
     return PlpPayload(plp_id=plp_id, fec_blocks=blocks, n_fec=n_fec)
+
+
+@dataclass
+class DecodedStreams:
+    """The network-layer streams recovered from one PLP's Baseband Packets.
+
+    Fields:
+        packets: the de-encapsulated ALP packets (A/330 5.1).
+        datagrams: UDP datagrams after IPv4 reassembly (RFC 791/768).
+        lls: Low-Level Signaling tables (A/331 6.1), keyed by table_id.
+        alp_stats: ALP walk bookkeeping (resyncs etc.), never hidden.
+        ip_stats: IPv4 reassembly bookkeeping.
+    """
+    packets: list
+    datagrams: list
+    lls: list
+    alp_stats: alp.AlpStats
+    ip_stats: ip_layer.IpStats
+
+
+def decode_streams(payload: PlpPayload) -> DecodedStreams:
+    """Run Baseband Packets -> ALP -> IPv4/UDP -> LLS (A/322 5.2, A/330 5).
+
+    Each converged FEC block yields one fixed-length Baseband Packet; their
+    payloads are concatenated and the Baseband Packet pointers seed the ALP
+    resynchronisation boundaries.
+    """
+    bpkts = [baseband.split_baseband_packet(p)
+             for p in payload.baseband_packets]
+    stream, boundaries = baseband.payload_stream(bpkts)
+    alp_packets, alp_stats = alp.parse_alp(stream, boundaries)
+
+    reasm = ip_layer.IpReassembler()
+    datagrams = []
+    for pkt in alp_packets:
+        if pkt.packet_type == alp.PT_IPV4:
+            datagrams.extend(reasm.feed(pkt.payload))
+    lls = [ip_layer.parse_lls(d.payload) for d in datagrams
+           if ip_layer.is_lls(d)]
+    lls = [t for t in lls if t is not None]
+    return DecodedStreams(packets=alp_packets, datagrams=datagrams, lls=lls,
+                          alp_stats=alp_stats, ip_stats=reasm.stats)
