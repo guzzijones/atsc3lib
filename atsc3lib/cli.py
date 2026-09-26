@@ -12,7 +12,7 @@ import logging
 import sys
 
 from . import spec
-from .receiver import decode_capture
+from .receiver import decode_capture, decode_plp_payload
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,11 @@ def decode_main(argv=None):
                         help="sample format (default: cs8, HackRF int8)")
     parser.add_argument('--max-iterations', type=int, default=100,
                         help='LDPC iteration cap')
+    parser.add_argument('--plp', type=int, default=None,
+                        help='also decode this subframe-0 PLP id (default: '
+                             'smallest subframe-0 PLP)')
+    parser.add_argument('--no-payload', action='store_true',
+                        help='decode signalling only, skip the PLP payload')
     parser.add_argument('-v', '--verbose', action='store_true')
 
     args = parser.parse_args(argv)
@@ -72,6 +77,20 @@ def decode_main(argv=None):
     if result.l1_detail is None:
         print(f"  L1-Detail FAILED: {result.error}")
         return 1
+
+    if not args.no_payload:
+        from .frontend import read_hackrf_iq
+        iq = read_hackrf_iq(args.file)
+        _, payload = decode_plp_payload(
+            iq, args.rate, plp_id=args.plp,
+            max_iterations=args.max_iterations, result=result)
+        if payload is None:
+            print("  Payload: no subframe-0 PLP decoded")
+        else:
+            print(f"  Payload: PLP {payload.plp_id}, "
+                  f"{payload.n_converged}/{payload.n_fec} FEC blocks converged")
+            for pkt in payload.baseband_packets[:4]:
+                print(f"    Baseband Packet: {len(pkt)} bytes")
     return 0
 
 

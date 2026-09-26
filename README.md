@@ -12,9 +12,12 @@ Implements, from the A/322 specification:
 - Frequency de-interleaving
 - L1-Basic and L1-Detail FEC (BCH + LDPC) and field parsing
 - **Per-PLP configuration** decoded from L1-Detail
+- **Data-PLP payload chain**: NUC/QAM demap, bit de-interleave, HTI twisted
+  block de-interleave, LDPC/BCH, descramble to Baseband Packets
 
 Validated against real off-air captures and an independent receiver.  The
-payload chain (PLP -> ALP -> IP) is not implemented yet.
+Baseband-Packet stream is the input to the A/330 ALP/IP layer, which is the
+next rung.
 
 ## Installation
 
@@ -54,12 +57,18 @@ Capture: out/capture.iq @ 10.000 MHz
 ## Python API
 
 ```python
-from atsc3lib import decode_capture
+from atsc3lib import decode_capture, decode_plp_payload
 
 result = decode_capture('out/capture.iq', fs_main=10e6, fmt='cs8')
 if result.l1_detail_ok:
     for subframe, plp in result.plps:
         print(subframe, plp.plp_id, plp.modulation, plp.code_rate)
+
+# Decode a subframe-0 PLP payload to Baseband Packets
+iq = ...  # the same capture IQ
+result, payload = decode_plp_payload(iq, fs_main=10e6, plp_id=16, result=result)
+for packet in payload.baseband_packets:
+    ...
 ```
 
 ## Supported Hardware
@@ -70,3 +79,16 @@ if result.l1_detail_ok:
 - **Any SoapySDR device**
 
 The library is hardware-agnostic: it consumes raw IQ samples from any source.
+
+## Payload limitations
+
+The payload chain supports Ninner = 16200 (short frames) only, and the
+tabulated QPSK/16QAM/64QAM/256QAM MODCODs.  The A/322 7.1.5.2 HTI **cell**
+interleaver (`L1D_plp_HTI_cell_interleaver = 1`) is not implemented; TI mode 2
+with cell interleaving disabled, and TI modes 0/1, are supported.
+
+PLP 0 (64QAM-NUC 11/15) of the RF33 multiplex sits at the ~18.8 dB AWGN
+threshold and the available captures measure ~15.9 dB MER, so it does not
+converge in either this receiver or the independent reference (0/74 FEC
+blocks).  This is a link-margin limit, not a chain error; the chain itself is
+verified bit-exact against reference-encoded 64QAM 11/15 cells.

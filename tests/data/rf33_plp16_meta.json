@@ -1,0 +1,15 @@
+{
+ "start": 199800,
+ "size": 8100,
+ "mod": "QPSK",
+ "rate": "2/15",
+ "ninner": 16200,
+ "ksig_bits": 1992,
+ "nouter_bits": 2160,
+ "kldpc": 2160,
+ "mouter": 168,
+ "cell_interleaver": 0,
+ "nti": 1,
+ "n_fec": 1,
+ "pool_before_plp16": 199800
+}

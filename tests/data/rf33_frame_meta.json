@@ -1,0 +1,22 @@
+{
+ "rate_hz": 6912000,
+ "t0": 13824,
+ "fft": 8192,
+ "gi": 1536,
+ "noc": 6913,
+ "dx": 4,
+ "dy": 2,
+ "n_data_symbols": 35,
+ "sbs_symbols": [
+  0,
+  34
+ ],
+ "preamble_structure": 27,
+ "plp16": {
+  "start": 199800,
+  "size": 8100,
+  "rate": 2,
+  "mod": "QPSK"
+ },
+ "plp16_bb_bytes": 249
+}

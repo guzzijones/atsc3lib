@@ -228,6 +228,43 @@ class BootstrapDetection:
     signaling: np.ndarray
 
 
+def _run_offset(k: int) -> int:
+    """Offset of the 520-sample lag-2048 repeat inside symbol k (A/321 5.4).
+
+    Symbol 0 is CAB (part C at [0,520), repeated at [2048,2568)); the later
+    symbols are BCA (part C at [504,1024), repeated at [2552,3072)).
+    """
+    return 0 if k == 0 else B_SIZE
+
+
+def fine_cfo(iq: np.ndarray, start: int,
+             num_symbols: int = NUM_BOOTSTRAP_SYMBOLS) -> float:
+    """Fractional carrier-frequency offset in Hz from the bootstrap.
+
+    Uses only the A/321 time geometry (part C is a repeat of the last 520
+    samples of part A), folding all four bootstrap symbols coherently.  This
+    is assumption-free and unambiguous within +/-FS/(2*2048) = +/-1500 Hz.
+
+    Args:
+        iq: Samples at the 6.144 MHz bootstrap rate.
+        start: Bootstrap start sample index.
+        num_symbols: Number of bootstrap symbols to fold.
+    """
+    symbol_len = C_SIZE + BOOTSTRAP_FFT_SIZE + B_SIZE
+    acc = 0.0 + 0.0j
+    for k in range(num_symbols):
+        o = start + k * symbol_len + _run_offset(k)
+        if o + BOOTSTRAP_FFT_SIZE + C_SIZE > len(iq):
+            continue
+        a = iq[o:o + C_SIZE]
+        b = iq[o + BOOTSTRAP_FFT_SIZE:o + BOOTSTRAP_FFT_SIZE + C_SIZE]
+        acc += np.vdot(b, a)
+    if acc == 0:
+        return 0.0
+    return float(-np.angle(acc) * spec.BOOTSTRAP_RATE_HZ
+                 / (2.0 * np.pi * BOOTSTRAP_FFT_SIZE))
+
+
 def _fft_correlate_abs(iq: np.ndarray, ref: np.ndarray) -> np.ndarray:
     """Magnitude of the linear cross-correlation of iq with ref (valid mode)."""
     n = len(iq)

@@ -19,7 +19,7 @@ from typing import List, Optional
 import numpy as np
 
 from . import spec
-from .bootstrap import detect_bootstrap
+from .bootstrap import detect_bootstrap, fine_cfo
 from .crc import crc32_ok
 from .frontend import read_hackrf_iq, resample_iq
 from .l1_basic import L1BasicCodec
@@ -53,23 +53,30 @@ class ReceiverResult:
 
 
 def _bootstrap_to_preamble(iq_main: np.ndarray, fs_main: float):
-    """Detect the bootstrap and return (preamble time samples, structure, start).
+    """Detect the bootstrap and return (preamble body, main frame, structure, start).
 
-    The bootstrap occupies ``BOOTSTRAP_TOTAL_SAMPLES`` at 6.144 MHz; the first
-    Preamble OFDM symbol begins immediately after it.  We return the Preamble
-    symbol's FFT-length body (guard interval removed) at the main sample rate.
+    ``main`` is the main-rate IQ beginning at the bootstrap, de-rotated by the
+    fractional carrier-frequency offset estimated from the bootstrap; the first
+    Preamble OFDM symbol body follows after the bootstrap span and the guard
+    interval.
     """
     boot = resample_iq(iq_main, fs_main, spec.BOOTSTRAP_RATE_HZ)
     det = detect_bootstrap(boot)
+    cfo = fine_cfo(boot, det.start)
 
     main = resample_iq(iq_main, fs_main, spec.MAIN_RATE_HZ)
     start = int(round(det.start * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
+    main = main[start:]
+    if cfo:
+        n = np.arange(len(main))
+        main = (main * np.exp(-1j * 2 * np.pi * cfo * n
+                              / spec.MAIN_RATE_HZ)).astype(np.complex64)
     boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
                           * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
     params = spec.PREAMBLE_STRUCTURE[det.structure]
-    sym_start = start + boot_span + params.gi
-    symbol = main[sym_start:sym_start + params.fft].astype(np.complex128)
-    return symbol, det.structure, start
+    symbol = main[boot_span + params.gi:boot_span + params.gi
+                  + params.fft].astype(np.complex128)
+    return symbol, main, det.structure, start
 
 
 def decode_signaling(iq_main: np.ndarray, fs_main: float,
@@ -86,11 +93,12 @@ def decode_signaling(iq_main: np.ndarray, fs_main: float,
         per-PLP configuration), plus the bootstrap/frame sample offsets.
     """
     try:
-        symbol, structure, start = _bootstrap_to_preamble(iq_main, fs_main)
+        symbol, main, structure, start = _bootstrap_to_preamble(iq_main, fs_main)
     except Exception as exc:  # noqa: BLE001 - report, do not crash the caller
-        return ReceiverResult(preamble_structure=-1, l1_basic=None, l1_basic_ok=False,
-                              l1_detail=None, l1_detail_ok=False,
-                              bootstrap_start=-1, frame_start=-1,
+        return ReceiverResult(preamble_structure=-1, l1_basic=None,
+                              l1_basic_ok=False, l1_detail=None,
+                              l1_detail_ok=False, bootstrap_start=-1,
+                              frame_start=-1,
                               error=f"bootstrap/preamble: {exc}")
 
     params = spec.PREAMBLE_STRUCTURE[structure]
@@ -148,3 +156,82 @@ def decode_capture(path: str, fs_main: float, fmt: str = 'auto',
     else:
         raise ValueError(f"Unknown capture format {fmt!r}")
     return decode_signaling(iq, fs_main, max_iterations=max_iterations)
+
+
+def _subframe0_geometry(result):
+    """Resolve subframe-0 demod geometry from a decoded ReceiverResult."""
+    lb = result.l1_basic
+    sf0 = result.l1_detail.subframes[0]
+    fft = {0: 8192, 1: 16384, 2: 32768}.get(lb.first_sub_fft_size, 8192)
+    gi = spec.guard_interval(fft, lb.first_sub_guard_interval)
+    noc = spec.noc(fft, lb.first_sub_reduced_carriers)
+    pattern = spec.SP_PATTERN_SIGNALING.get(
+        lb.first_sub_scattered_pilot_pattern, 'SP4_2')
+    dx, dy = spec.SP_DXDY.get(pattern, (4, 2))
+    n_sym = sf0.get('num_ofdm_symbols')
+    if n_sym is None:
+        n_sym = lb.first_sub_num_ofdm_symbols
+    n_data_symbols = n_sym + 1
+    sbs = []
+    if sf0.get('sbs_first') or lb.first_sub_sbs_first:
+        sbs.append(0)
+    if sf0.get('sbs_last') or lb.first_sub_sbs_last:
+        sbs.append(n_data_symbols - 1)
+    sbs_null = sf0.get('sbs_null_cells')
+    return dict(fft=fft, gi=gi, noc=noc, dx=dx, dy=dy,
+                n_data_symbols=n_data_symbols, sbs=tuple(sbs),
+                pattern=pattern, sbs_null=sbs_null)
+
+
+def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
+                       max_iterations: int = 100, result=None):
+    """Decode one subframe-0 data PLP's payload.
+
+    ``plp_id`` selects the PLP; when None the smallest subframe-0 PLP is
+    chosen (the RF33 PLP-16 signalling shape).  ``result`` may supply an
+    already-decoded :class:`ReceiverResult` to avoid re-running the signalling
+    chain.  Returns ``(result, payload)`` with ``payload`` a
+    :class:`~atsc3lib.payload.PlpPayload` or None.
+    """
+    from .payload import decode_subframe0_plp
+
+    if result is None:
+        result = decode_signaling(iq_main, fs_main,
+                                  max_iterations=max_iterations)
+    if not result.l1_detail_ok:
+        return result, None
+
+    sf0 = result.l1_detail.subframes[0]
+    candidates = [p for p in sf0['plps'] if p.layer == 0]
+    if not candidates:
+        return result, None
+    if plp_id is None:
+        target = min(candidates, key=lambda p: p.size)
+    else:
+        target = next((p for p in candidates if p.plp_id == plp_id), None)
+    if target is None:
+        return result, None
+
+    g = _subframe0_geometry(result)
+    _, main, structure, _ = _bootstrap_to_preamble(iq_main, fs_main)
+    l1_cells = 484 + result.l1_basic.l1_detail_total_cells
+    boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
+                          * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
+    payload = decode_subframe0_plp(
+        main, boot_span, g['fft'], g['gi'], g['noc'], g['dx'], g['dy'],
+        g['n_data_symbols'], g['sbs'], preamble_structure=structure,
+        l1_cells=l1_cells, plp=target, max_iterations=max_iterations,
+        pattern=g['pattern'], sbs_null=g['sbs_null'])
+    return result, payload
+
+
+def decode_first_plp_payload(iq_main: np.ndarray, fs_main: float,
+                             max_iterations: int = 100, result=None):
+    """Decode signalling and the smallest subframe-0 PLP payload.
+
+    This is the RF33-class case (a small QPSK PLP alongside a large payload
+    PLP).  Returns ``(result, payload)`` where ``payload`` is a
+    :class:`~atsc3lib.payload.PlpPayload` or None.
+    """
+    return decode_plp_payload(iq_main, fs_main, plp_id=None,
+                              max_iterations=max_iterations, result=result)

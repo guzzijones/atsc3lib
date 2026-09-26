@@ -41,3 +41,6 @@ atsc3-capture = "atsc3lib.capture:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["atsc3lib*"]
+
+[tool.setuptools.package-data]
+atsc3lib = ["data/*.json", "data/*.npz"]

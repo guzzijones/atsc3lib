@@ -62,6 +62,24 @@ GUARD_INTERVALS = {
     32768: [192, 384, 512, 768, 1024, 1536, 2048, 2432, 3072, 3648, 4096, 4864],
 }
 
+# A/322 Table 8.6/9.14 guard-interval signalling value -> sample length.
+# Value 0 is reserved and 13..15 are reserved; 1..12 map 192..4864.  Note this
+# is NOT the list index: signalling value 6 (GI6_1536) is index 5 in
+# ``GUARD_INTERVALS``.  Not every value is legal for every FFT size.
+GI_SAMPLES = {
+    1: 192, 2: 384, 3: 512, 4: 768, 5: 1024, 6: 1536, 7: 2048,
+    8: 2432, 9: 3072, 10: 3648, 11: 4096, 12: 4864,
+}
+
+
+def guard_interval(fft_size: int, value: int) -> int:
+    """Guard-interval length for an FFT size and A/322 signalling value."""
+    gi = GI_SAMPLES.get(value)
+    if gi is None or gi not in GUARD_INTERVALS[fft_size]:
+        raise ValueError(
+            f"guard-interval value {value} is not legal for FFT {fft_size}")
+    return gi
+
 
 def noc(fft_size: int, cred_coeff: int) -> int:
     """Number of carriers NoC for an FFT size and cred_coeff (Table 7.1)."""
@@ -371,6 +389,55 @@ def l1d_lengths(mode: int, ksig: int) -> L1DetailLengths:
         eta=m.eta, n_fec=n_fec, n_parity_kept=n_fec - nouter, n_punc=n_punc,
         n_cells=n_fec // m.eta, rate=m.rate)
 
+
+# ===========================================================================
+# Scattered pilot patterns and payload data cells (A/322 8.1.3, Tables 7.3/7.4)
+# ===========================================================================
+# Scattered pilot pattern -> (DX, DY), A/322 Table 8.2.
+SP_DXDY = {
+    'SP3_2': (3, 2), 'SP3_4': (3, 4), 'SP4_2': (4, 2), 'SP4_4': (4, 4),
+    'SP6_2': (6, 2), 'SP6_4': (6, 4), 'SP8_2': (8, 2), 'SP8_4': (8, 4),
+    'SP12_2': (12, 2), 'SP12_4': (12, 4), 'SP16_2': (16, 2), 'SP16_4': (16, 4),
+    'SP24_2': (24, 2), 'SP24_4': (24, 4), 'SP32_2': (32, 2), 'SP32_4': (32, 4),
+}
+
+# Additional continual pilots (A/322 Table D.1.4) for the 8K patterns used by
+# RF33-class multiplexes.  Values are relative carrier indices; indices listed
+# in parentheses in the table are not used when cred_coeff is odd.
+ADDITIONAL_CP_8K = {
+    'SP3_2': (1731,), 'SP3_4': (1731,), 'SP4_2': (1732,), 'SP4_4': (1732,),
+    'SP6_2': (1734,), 'SP6_4': (1734,), 'SP8_2': (1744,), 'SP8_4': (1744,),
+    'SP12_2': (1740,), 'SP12_4': (1740,), 'SP16_2': (1744,), 'SP16_4': (1744,),
+    'SP24_2': (), 'SP24_4': (), 'SP32_2': (), 'SP32_4': (),
+}
+
+# Available data cells per DATA symbol (A/322 Table 7.3/7.4) for 8K, cred 0.
+AVAIL_DATA_8K = {
+    'SP3_2': 5711, 'SP3_4': 6285, 'SP4_2': 5999, 'SP4_4': 6429,
+    'SP6_2': 6287, 'SP6_4': 6573, 'SP8_2': 6431, 'SP8_4': 6645,
+    'SP12_2': 6575, 'SP12_4': 6717, 'SP16_2': 6647, 'SP16_4': 6753,
+    'SP24_2': 6719, 'SP24_4': 6789, 'SP32_2': 6755, 'SP32_4': 6807,
+}
+
+# Subframe boundary symbol geometry (A/322 Tables 7.5/7.6 total, Annex F
+# active) for 8K, cred 0, one subframe boundary symbol per subframe.
+SBS_TOTAL_8K_CRED0 = 5136      # Table 7.5/7.6
+SBS_ACTIVE_8K_CRED0 = 5009     # Annex F (available for cell multiplexing)
+SBS_NULL_8K_CRED0 = SBS_TOTAL_8K_CRED0 - SBS_ACTIVE_8K_CRED0  # 127
+
+
+def additional_cp(pattern: str) -> tuple:
+    """Additional continual pilot indices for an 8K scattered pilot pattern."""
+    return ADDITIONAL_CP_8K.get(pattern, ())
+
+
+# Scattered pilot pattern signaling values (A/322 Table 9.12, SISO).
+SP_PATTERN_SIGNALING = {
+    0: 'SP3_2', 1: 'SP3_4', 2: 'SP4_2', 3: 'SP4_4',
+    4: 'SP6_2', 5: 'SP6_4', 6: 'SP8_2', 7: 'SP8_4',
+    8: 'SP12_2', 9: 'SP12_4', 10: 'SP16_2', 11: 'SP16_4',
+    12: 'SP24_2', 13: 'SP24_4', 14: 'SP32_2', 15: 'SP32_4',
+}
 
 # ===========================================================================
 # Large tables are defined in their own modules and re-exported here so callers

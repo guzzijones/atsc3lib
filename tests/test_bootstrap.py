@@ -7,7 +7,7 @@ from atsc3lib import spec
 from atsc3lib.bootstrap import (
     generate_bootstrap, detect_bootstrap, decode_preamble_structure,
     encode_bootstrap_signaling, SHIFT_FOR_BYTE, BYTE_FOR_SHIFT,
-    MINOR_VERSION_SEEDS, BOOTSTRAP_FFT_SIZE,
+    MINOR_VERSION_SEEDS, BOOTSTRAP_FFT_SIZE, fine_cfo,
     NUM_BOOTSTRAP_SYMBOLS, B_SIZE, C_SIZE,
 )
 
@@ -97,3 +97,17 @@ class TestDetection:
     def test_detect_requires_length(self):
         with pytest.raises(ValueError, match="samples"):
             detect_bootstrap(np.zeros(100, dtype=np.complex128))
+
+
+class TestFineCfo:
+    @pytest.mark.parametrize('cfo_hz', [0.0, 250.0, -700.0])
+    def test_recovers_injected_cfo(self, cfo_hz):
+        wf = generate_bootstrap(27, major=0, minor=0)
+        n = np.arange(len(wf))
+        rx = wf * np.exp(1j * 2 * np.pi * cfo_hz * n / spec.BOOTSTRAP_RATE_HZ)
+        rx = np.concatenate([np.zeros(500, dtype=np.complex128), rx])
+        est = fine_cfo(rx, 500)
+        assert abs(est - cfo_hz) < 5.0
+
+    def test_zero_for_empty(self):
+        assert fine_cfo(np.zeros(10, dtype=np.complex128), 0) == 0.0

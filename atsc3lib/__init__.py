@@ -48,6 +48,8 @@ from .ldpc_exact import ATSC3LDPCExact
 from .bch import BCHCode
 from .group_interleaver import GroupInterleaver
 from .prbs_descrambler import PRBSDescrambler, BitScrambler
+from . import nuc
+from . import twisted_block
 from . import signaling_fec
 
 # Signalling
@@ -58,9 +60,17 @@ from .l1_signaling import (
 from .l1_basic import L1BasicCodec, scramble_bits
 from .l1_detail import L1DetailCodec
 
+# Payload
+from .payload import (
+    QPSKPlpChain, DataPlpChain, build_cell_pool, data_symbol_cells,
+    qpsk_demap_llr, CellPool, QPSK_POINTS, PlpPayload,
+    decode_subframe0_qpsk_plp,
+)
+
 # Receiver (full chain)
 from .receiver import (
     decode_signaling, decode_capture, ReceiverResult,
+    decode_first_plp_payload, decode_plp_payload,
 )
 
 __all__ = [
@@ -108,6 +118,8 @@ __all__ = [
     "PRBSDescrambler",
     "BitScrambler",
     "signaling_fec",
+    "nuc",
+    "twisted_block",
     # signalling
     "L1SignalingParser",
     "parse_l1_basic",
@@ -118,10 +130,22 @@ __all__ = [
     "L1BasicCodec",
     "L1DetailCodec",
     "scramble_bits",
+    # payload
+    "QPSKPlpChain",
+    "DataPlpChain",
+    "build_cell_pool",
+    "data_symbol_cells",
+    "qpsk_demap_llr",
+    "CellPool",
+    "QPSK_POINTS",
+    "PlpPayload",
+    "decode_subframe0_qpsk_plp",
     # receiver
     "decode_signaling",
     "decode_capture",
     "ReceiverResult",
+    "decode_first_plp_payload",
+    "decode_plp_payload",
     # modules
     "spec",
     "crc",
