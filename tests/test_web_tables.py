@@ -11,14 +11,15 @@ import pytest
 from tools.crosscheck_web_tables import (
     GROUP_FILE, LDPC_FILE, REF_COMMIT, REF_REPO, check_group, check_ldpc,
 )
-from tools.crosscheck_web_tables import _fetch, _RAW
+from tools.crosscheck_web_tables import _fetch
+from tools.spec_sources import REF_RAW
 
 
 @pytest.fixture(scope='module')
 def sources():
     try:
-        ldpc = _fetch(f'{_RAW}/{LDPC_FILE}', None, LDPC_FILE)
-        group = _fetch(f'{_RAW}/{GROUP_FILE}', None, GROUP_FILE)
+        ldpc = _fetch(f'{REF_RAW}/{LDPC_FILE}', None, LDPC_FILE)
+        group = _fetch(f'{REF_RAW}/{GROUP_FILE}', None, GROUP_FILE)
     except OSError as exc:
         pytest.skip(f'{REF_REPO}@{REF_COMMIT[:12]} unreachable: {exc}')
     return ldpc, group

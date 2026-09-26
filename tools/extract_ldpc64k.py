@@ -32,13 +32,16 @@ C1  the printed two-column tables list row weights in non-increasing order;
     is load-bearing (G1-G4 alone cannot see row order)
 
 Usage:
-    python tools/extract_ldpc64k.py /tmp/opencode/a322.pdf \\
-        atsc3lib/data/ldpc_tables_N64800.json
+    python tools/extract_ldpc64k.py [pdf] [out]
+The pdf argument is optional: when omitted the official A/322 PDF is fetched
+to a local cache (see ``tools/spec_sources.py``) and the banked
+``atsc3lib/data/ldpc_tables_N64800.json`` is overwritten.
 Requires PyMuPDF (`pip install pymupdf`).
 """
 
 import argparse
 import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Dict, List
@@ -52,11 +55,17 @@ from atsc3lib.ldpc_exact import (
 from tools.pdf_layout import (
     CAPTION_GAP, COLUMN_GAP, PdfLine, integer_lines, line_values, page_lines,
 )
+from tools.spec_sources import A322, pdf_path
 
 #: Table caption form: "Table A.1.<n> Rate = <r>/<denom>".
 _RATE_CAPTION = re.compile(
     rf"Table A\.1\.\d+\s+Rate\s*=\s*(\d+)\s*/\s*{RATE_DENOM}")
 _CAPTION_PREFIX = "Table A.1."
+
+#: Default output path: the banked normal-frame table in the package.
+DEFAULT_OUT = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    'atsc3lib', 'data', 'ldpc_tables_N64800.json')
 
 
 @dataclass(frozen=True)
@@ -196,11 +205,13 @@ def _control_row_interleave(doc, pages) -> int:
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("pdf")
-    ap.add_argument("out")
+    ap.add_argument("pdf", nargs="?", default=None,
+                    help="A/322 PDF (default: fetch the official copy)")
+    ap.add_argument("out", nargs="?", default=DEFAULT_OUT,
+                    help="output JSON (default: the banked table)")
     args = ap.parse_args(argv)
 
-    doc = pymupdf.open(args.pdf)
+    doc = pymupdf.open(pdf_path(A322, args.pdf))
     pages = _table_pages(doc)
     tables = {}
     for rate in range(RATE_MIN, RATE_MAX + 1):

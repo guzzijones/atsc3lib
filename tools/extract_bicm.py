@@ -24,13 +24,16 @@ G2  every permutation is a bijection of 0..Ngroup-1
 G3  Ngroup values per tabulated rate
 
 Usage:
-    python tools/extract_bicm.py /tmp/opencode/a322.pdf \\
-        atsc3lib/data/group_interleaver_64800.json
+    python tools/extract_bicm.py [pdf] [out]
+The pdf argument is optional: when omitted the official A/322 PDF is fetched
+to a local cache (see ``tools/spec_sources.py``) and the banked
+``atsc3lib/data/group_interleaver_64800.json`` is overwritten.
 Requires PyMuPDF (`pip install pymupdf`).
 """
 
 import argparse
 import json
+import os
 from dataclasses import dataclass
 from typing import Dict, List
 
@@ -39,6 +42,7 @@ import pymupdf
 from atsc3lib.ldpc_exact import NINNER_NORMAL, RATE_MIN, RATE_MAX, GROUP_SIZE
 from atsc3lib.nuc import QPSK, QAM16, QAM64, QAM256, QAM1024, QAM4096
 from tools.pdf_layout import integer_lines, line_values
+from tools.spec_sources import A322, pdf_path
 
 #: Annex B.1 table page ranges (0-based PDF page indices), per modulation.
 TABLE_PAGES: Dict[str, range] = {
@@ -57,6 +61,11 @@ RATES = list(range(RATE_MIN, RATE_MAX + 1))
 #: The printed identity header row of a group-interleaver table (a per-table
 #: checksum of the column ordering).
 IDENTITY = list(range(NGROUP))
+
+#: Default output path: the banked normal-frame table in the package.
+DEFAULT_OUT = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    'atsc3lib', 'data', 'group_interleaver_64800.json')
 
 
 @dataclass(frozen=True)
@@ -94,11 +103,13 @@ def gate(block: AnnexBlock) -> None:
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("pdf")
-    ap.add_argument("out")
+    ap.add_argument("pdf", nargs="?", default=None,
+                    help="A/322 PDF (default: fetch the official copy)")
+    ap.add_argument("out", nargs="?", default=DEFAULT_OUT,
+                    help="output JSON (default: the banked table)")
     args = ap.parse_args(argv)
 
-    doc = pymupdf.open(args.pdf)
+    doc = pymupdf.open(pdf_path(A322, args.pdf))
     out = {}
     for mod, pages in TABLE_PAGES.items():
         block = AnnexBlock(parse_modulation(doc, pages))

@@ -31,11 +31,8 @@ from atsc3lib.ldpc_exact import (
     NINNER_NORMAL, RATE_MIN, RATE_MAX, GROUP_SIZE,
 )
 from atsc3lib.nuc import QPSK, QAM16, QAM64, QAM256, QAM1024, QAM4096
+from tools.spec_sources import REF_COMMIT, REF_RAW, REF_REPO
 
-#: Pinned upstream revision of the reference transcription.
-REF_COMMIT = '000b86a325e2506eb063a25cd182d79c4b57acdd'
-REF_REPO = 'drmpeg/gr-atsc3'
-_RAW = f'https://raw.githubusercontent.com/{REF_REPO}/{REF_COMMIT}/lib'
 #: Source files holding the LDPC and group-interleaver tables.
 LDPC_FILE = 'ldpc_bb_impl.cc'
 GROUP_FILE = 'interleaver_bb_impl.cc'
@@ -123,8 +120,8 @@ def main(argv=None):
                     help='directory with pre-fetched .cc files')
     args = ap.parse_args(argv)
 
-    ldpc = check_ldpc(_fetch(f'{_RAW}/{LDPC_FILE}', args.src, LDPC_FILE))
-    group = check_group(_fetch(f'{_RAW}/{GROUP_FILE}', args.src, GROUP_FILE))
+    ldpc = check_ldpc(_fetch(f'{REF_RAW}/{LDPC_FILE}', args.src, LDPC_FILE))
+    group = check_group(_fetch(f'{REF_RAW}/{GROUP_FILE}', args.src, GROUP_FILE))
 
     failed = False
     for result in (ldpc, group):
