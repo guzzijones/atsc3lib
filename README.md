@@ -99,6 +99,12 @@ are surfaced as raw ALP packets rather than decompressed datagrams.
 
 ## Payload limitations
 
+**Ground rule: every rung must be validated on air.**  A feature is only
+implemented when a receivable stream carries it; a structural or synthetic
+round-trip gate does not qualify a rung.  If the link cannot deliver the
+feature, record the blocker and move on rather than building an unprovable
+stage.
+
 The payload chain supports both Ninner = 16200 (short frames) and
 Ninner = 64800 (normal frames), and the tabulated QPSK/16QAM/64QAM/256QAM
 MODCODs.  TI mode 2 supports the A/322 7.1.5.4 twisted block interleaver and
@@ -124,14 +130,15 @@ counting frame symbols (so subframe 0's first data symbol has origin NP).  RF30
 air.
 
 PLP 0 (64QAM-NUC 11/15) of the RF33 multiplex sits at the ~18.8 dB AWGN
-threshold; on the solid feed the cells measure **16.0 dB MER**, so it does not
-converge in either this receiver or the independent reference (0/74 FEC
-blocks).  Subframe 1's PLP 1 (256QAM-NUC 11/15, 64800) needs ~22 dB MER and the
-same feed measures **20.6 dB** — ~2.5 dB short of 64QAM and ~1.4 dB short of
-256QAM, with no LOS to close it.  Both shortfalls are **link-margin limits, not
-chain errors**: the chains are verified bit-exact against reference-encoded
-cells, and the MER is measured against each MODCOD's own alphabet.  Therefore
-**256QAM and every other margin-gated feature are out of scope by decision**,
+threshold; on the solid feed the cells measure **16.0 dB MER**, so it is
+**unachievable** here: ~2.8 dB short, and it does not converge in either this
+receiver or the independent reference (0/74 FEC blocks).  Subframe 1's PLP 1
+(256QAM-NUC 11/15, 64800) needs ~22 dB MER and the same feed measures
+**20.6 dB** — ~1.4 dB short, likewise **unachievable**, with no LOS to close it.
+Both shortfalls are **link-margin limits, not chain errors**: the chains are
+verified bit-exact against reference-encoded cells, and the MER is measured
+against each MODCOD's own alphabet.  Therefore **RF33 PLP-0 (64QAM 11/15),
+256QAM, and every other margin-gated feature are out of scope by decision**,
 and subframe 1 is gated structurally — its 16K cell pool closes exactly (956179
 cells) and the pilot/data-cell identity holds — rather than on PLP-1 payload
 bits.
@@ -151,3 +158,8 @@ default for the CTI path (`decode_cti_plp_streams`; `--no-fine-timing`,
 because the available RF30 captures are link-limited (preamble coherence 0.825,
 versus 0.96-0.98 on RF33 with the same radio/feed), not because of a chain gap;
 those RF30 captures have been removed so they are not mistaken for a fixture.
+
+The **RF6** captures (`out/recapture/rf6_*.iq`, 85 MHz) carry no bootstrap and
+no 6 MHz TV profile — `rf6_g8.iq` is flat noise and `rf6_85.iq` a flat ~40 dB
+plateau — so RF6 is **not receivable** here (super-low power) and is recorded,
+not worked.  No feature is gated on it.
