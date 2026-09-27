@@ -158,6 +158,7 @@ class ATSC3LDPCExact:
         self.code_type = (FEC_TYPE_A if rate in TYPE_A_PARAMS[n]
                           else FEC_TYPE_B)
         self.max_iterations = max_iterations
+        self.last_hard: Optional[np.ndarray] = None
 
         # Load official table (keyed by rate).
         tables = load_tables(n)
@@ -390,6 +391,16 @@ class ATSC3LDPCExact:
         gathered = hard[self.check_idx] * self.check_mask
         return np.bitwise_xor.reduce(gathered, axis=1)
 
+    def n_unsatisfied(self) -> int:
+        """Unsatisfied check count of the last :meth:`decode` hard decision.
+
+        A near-zero count on a non-converged block points at the decoder's
+        attenuation constant, not the link (the normalized-min-sum trap).
+        """
+        if self.last_hard is None:
+            return -1
+        return int(self._syndrome_unsatisfied(self.last_hard).sum())
+
     def decode(self, llrs: np.ndarray, max_iterations: Optional[int] = None,
                alpha: float = 0.75) -> Tuple[np.ndarray, bool]:
         """Decode with vectorized normalized min-sum belief propagation.
@@ -464,6 +475,8 @@ class ATSC3LDPCExact:
 
             hard = (total < 0).astype(np.uint8)
             if self.check_syndrome_bits(hard):
+                self.last_hard = hard
                 return hard[:self.K], True
 
+        self.last_hard = hard
         return hard[:self.K], False

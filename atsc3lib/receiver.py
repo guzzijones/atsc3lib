@@ -230,7 +230,8 @@ def _subframe0_geometry(result):
                 pattern=pattern, sbs_null=sbs_null,
                 cred=lb.first_sub_reduced_carriers,
                 n_preamble_symbols=n_preamble_symbols,
-                fi_offset=n_preamble_symbols)
+                fi_offset=n_preamble_symbols,
+                fi_enabled=bool(sf0.get('frequency_interleaver', 1)))
 
 
 def subframe_geometry(result, index: int):
@@ -260,7 +261,8 @@ def subframe_geometry(result, index: int):
     return dict(fft=fft, gi=gi, noc=noc, dx=dx, dy=dy,
                 n_data_symbols=n_data_symbols, sbs=tuple(sbs),
                 pattern=pattern, sbs_null=sf.get('sbs_null_cells'),
-                cred=cred, fi_offset=0)
+                cred=cred, fi_offset=0,
+                fi_enabled=bool(sf.get('frequency_interleaver', 1)))
 
 
 def _subframe_start_offset(result) -> int:
@@ -282,7 +284,8 @@ def _subframe_start_offset(result) -> int:
 
 def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
                        max_iterations: int = 100, result=None,
-                       subframe: int = 0):
+                       subframe: int = 0, fine_timing: bool = False,
+                       cpe: bool = False):
     """Decode one data PLP's payload from a named subframe (default 0).
 
     ``plp_id`` selects the PLP; when None the smallest layer-0 PLP of the
@@ -293,7 +296,9 @@ def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
 
     Subframe 0 includes the Preamble's spare cells; every later subframe is
     demodulated at its own FFT/GI/pilot geometry with the A/322 7.3 frequency
-    interleaver counter reset at the subframe boundary.
+    interleaver counter reset at the subframe boundary.  ``fine_timing``
+    refines the FFT window off the scattered pilots; ``cpe`` runs the
+    decision-directed per-symbol common-phase correction.
     """
     from .payload import decode_subframe0_plp, decode_subframe_plp
 
@@ -320,6 +325,7 @@ def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
     _, main, structure, _ = _bootstrap_to_preamble(iq_main, fs_main)
     boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
                           * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
+    dummy_start = _dummy_tail_start(result, subframe)
     if subframe == 0:
         n_l1b = L1BasicCodec(
             spec.PREAMBLE_STRUCTURE[structure].l1b_mode).n_cells
@@ -331,7 +337,8 @@ def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
             pattern=g['pattern'], sbs_null=g['sbs_null'],
             preamble_num_symbols=g['n_preamble_symbols'],
             preamble_reduced_carriers=result.l1_basic.preamble_reduced_carriers,
-            l1b_cells=n_l1b)
+            l1b_cells=n_l1b, fi_enabled=g['fi_enabled'],
+            fine_timing_enabled=fine_timing, cpe=cpe, dummy_start=dummy_start)
     else:
         t0 = boot_span + _subframe_start_offset(result)
         payload = decode_subframe_plp(
@@ -339,7 +346,8 @@ def decode_plp_payload(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
             g['n_data_symbols'], g['sbs'], plp=target,
             max_iterations=max_iterations, pattern=g['pattern'],
             sbs_null=g['sbs_null'], cred_coeff=g['cred'],
-            fi_offset=g['fi_offset'])
+            fi_offset=g['fi_offset'], fi_enabled=g['fi_enabled'],
+            fine_timing_enabled=fine_timing, cpe=cpe, dummy_start=dummy_start)
     return result, payload
 
 
@@ -372,3 +380,112 @@ def decode_plp_streams(iq_main: np.ndarray, fs_main: float, plp_id: int = None,
     if payload is None:
         return result, None
     return result, decode_streams(payload)
+
+
+def frame_samples(result) -> int:
+    """Main-rate samples of one frame: bootstrap, Preamble symbols, data."""
+    pre = spec.PREAMBLE_STRUCTURE[result.preamble_structure]
+    g = _subframe0_geometry(result)
+    boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
+                          * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
+    return (boot_span
+            + (pre.fft + pre.gi) * g['n_preamble_symbols']
+            + (g['fft'] + g['gi']) * g['n_data_symbols'])
+
+
+def _dummy_tail_start(result, subframe: int = 0) -> Optional[int]:
+    """Pool index where a subframe's A/322 7.2.6.5 dummy tail begins.
+
+    Every layer-0 PLP of the subframe occupies a slice of the pool; the dummy
+    tail follows the last of them.  Returns None when the subframe has no
+    layer-0 PLP.
+    """
+    sf = result.l1_detail.subframes[subframe]
+    ends = [p.start + p.size for p in sf['plps'] if p.layer == 0]
+    return max(ends) if ends else None
+
+
+def _subframe0_cell_pool(result, main: np.ndarray, boot_span: int,
+                         plp=None, fine_timing: bool = False,
+                         cpe: bool = False):
+    """Build subframe 0's cell pool from a frame-aligned main stream.
+
+    ``main`` starts at the bootstrap, so ``t0`` is ``boot_span`` (the Preamble
+    begins after the bootstrap span).  ``plp`` supplies the constellation for
+    the CPE and the dummy-tail boundary; ``fine_timing`` refines the FFT window
+    off the scattered pilots.
+    """
+    from .payload import build_cell_pool, cpe_spec
+    g = _subframe0_geometry(result)
+    pre = spec.PREAMBLE_STRUCTURE[result.preamble_structure]
+    n_l1b = L1BasicCodec(pre.l1b_mode).n_cells
+    l1_cells = n_l1b + result.l1_basic.l1_detail_total_cells
+    return build_cell_pool(
+        main, boot_span, g['fft'], g['gi'], g['noc'], g['dx'], g['dy'],
+        g['n_data_symbols'], sbs_symbols=g['sbs'],
+        preamble_structure=result.preamble_structure, l1_cells=l1_cells,
+        pattern=g['pattern'], sbs_null=g['sbs_null'],
+        preamble_num_symbols=g['n_preamble_symbols'],
+        preamble_reduced_carriers=result.l1_basic.preamble_reduced_carriers,
+        l1b_cells=n_l1b, fi_enabled=g['fi_enabled'],
+        fine_timing_enabled=fine_timing,
+        cpe=cpe_spec(plp, _dummy_tail_start(result, 0))
+        if (cpe and plp is not None) else None), g
+
+
+def decode_cti_plp_streams(iq_main: np.ndarray, fs_main: float,
+                           plp_id: int = None, n_frames: int = 6,
+                           max_iterations: int = 50, result=None,
+                           max_blocks: int = None, fine_timing: bool = True,
+                           cpe: bool = True):
+    """Decode a CTI-mode PLP across consecutive frames (A/322 7.1.4).
+
+    The convolutional time interleaver never resets, so a FEC block spans
+    frames; this gathers the PLP's cells from ``n_frames`` consecutive
+    bootstrap-aligned frames, CTI de-interleaves, and decodes from the offset
+    the transmitter signals.  Returns ``(result, CtiDecode, streams)``.
+
+    ``fine_timing`` refines each frame's FFT window off the scattered pilots and
+    ``cpe`` applies the decision-directed per-symbol common-phase correction;
+    both are ON by default for this path, which is where they matter.
+
+    This is the RF30/RF25 Core-layer path (LDM, CTI, Ninner 64800).
+    """
+    from .payload import decode_cti_plp, decode_streams
+
+    if result is None:
+        result = decode_signaling(iq_main, fs_main,
+                                  max_iterations=max_iterations)
+    if not result.l1_detail_ok:
+        return result, None, None
+
+    sf = result.l1_detail.subframes[0]
+    candidates = [p for p in sf['plps'] if p.layer == 0]
+    if not candidates:
+        return result, None, None
+    if plp_id is None:
+        target = min(candidates, key=lambda p: p.size)
+    else:
+        target = next((p for p in candidates if p.plp_id == plp_id), None)
+    if target is None:
+        return result, None, None
+
+    _, main, structure, _ = _bootstrap_to_preamble(iq_main, fs_main)
+    boot_span = int(round(spec.BOOTSTRAP_TOTAL_SAMPLES
+                          * spec.MAIN_RATE_HZ / spec.BOOTSTRAP_RATE_HZ))
+    period = frame_samples(result)
+    segs = []
+    for n in range(n_frames):
+        off = n * period
+        if off + boot_span + period > len(main):
+            break
+        pool, _g = _subframe0_cell_pool(result, main[off:], boot_span,
+                                        plp=target, fine_timing=fine_timing,
+                                        cpe=cpe)
+        segs.append(pool.cells[target.start:target.start + target.size])
+    if not segs:
+        return result, None, None
+    decoded = decode_cti_plp(np.concatenate(segs), target,
+                             max_iterations=max_iterations,
+                             max_blocks=max_blocks)
+    return result, decoded, decode_streams(decoded.payload)

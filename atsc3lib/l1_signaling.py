@@ -195,6 +195,9 @@ class PLPConfig:
     hti_num_ti_blocks: Optional[int]
     hti_num_fec_blocks: Optional[int]
     hti_cell_interleaver: Optional[int]
+    cti_depth: Optional[int]
+    cti_start_row: Optional[int]
+    ti_extended_interleaving: Optional[int]
     ldm_injection_level: Optional[int]
     raw: Dict[str, int] = field(default_factory=dict)
 
@@ -245,6 +248,7 @@ def _parse_plp(r: _BitReader, n_rf: int, first_sub_mimo: int,
         r.read('L1D_plp_mimo_IQ_interleaving', 1)
         r.read('L1D_plp_mimo_PH', 1)
     hti_inter = hti_ti = hti_fec = hti_cell = None
+    cti_depth = cti_start_row = ti_extended = None
     ldm_level = None
     if layer == 0:
         plp_type = r.read('L1D_plp_type', 1)
@@ -252,10 +256,10 @@ def _parse_plp(r: _BitReader, n_rf: int, first_sub_mimo: int,
             r.read('L1D_plp_num_subslices', 14)
             r.read('L1D_plp_subslice_interval', 24)
         if ti_mode in (1, 2) and mod == 0:
-            r.read('L1D_plp_TI_extended_interleaving', 1)
+            ti_extended = r.read('L1D_plp_TI_extended_interleaving', 1)
         if ti_mode == 1:
-            r.read('L1D_plp_CTI_depth', 3)
-            r.read('L1D_plp_CTI_start_row', 11)
+            cti_depth = r.read('L1D_plp_CTI_depth', 3)
+            cti_start_row = r.read('L1D_plp_CTI_start_row', 11)
         elif ti_mode == 2:
             hti_inter = r.read('L1D_plp_HTI_inter_subframe', 1)
             hti_ti = r.read('L1D_plp_HTI_num_ti_blocks', 4)
@@ -275,6 +279,8 @@ def _parse_plp(r: _BitReader, n_rf: int, first_sub_mimo: int,
         code_rate=cod, ti_mode=ti_mode, ti_fec_block_start=ti_start,
         hti_inter_subframe=hti_inter, hti_num_ti_blocks=hti_ti,
         hti_num_fec_blocks=hti_fec, hti_cell_interleaver=hti_cell,
+        cti_depth=cti_depth, cti_start_row=cti_start_row,
+        ti_extended_interleaving=ti_extended,
         ldm_injection_level=ldm_level, raw={})
 
 

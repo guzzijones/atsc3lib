@@ -162,6 +162,20 @@ PREAMBLE_DATA_CELLS_CRED4 = {
     (32768, 3648): 22764, (32768, 4096): 21756, (32768, 4864): 21756,
 }
 
+# Half-width, in samples, of the pilot-coherence search for the FFT window
+# start of a symbol.  The Preamble's coherence plateau is flat across the whole
+# guard interval (A/322 7.2.5.1 fixes its pilots), so the search only has to
+# span a few samples either side of the bootstrap-anchored nominal position;
+# the bootstrap itself has already placed the frame to within one GI.
+FINE_TIMING_SPAN = 24
+
+# Iterations of the decision-directed per-symbol common-phase correction
+# (CPE), which removes each OFDM symbol's residual complex gain after
+# equalisation.  Three iterations are the oracle's own count and converged on
+# every banked capture; the estimator is a mean over the pool's ~6000 cells per
+# symbol, so it is not iteration-limited.
+CPE_ITERATIONS = 3
+
 # ===========================================================================
 # Common continual pilots (A/322 Table D.1.1)
 # ===========================================================================
@@ -486,6 +500,123 @@ ALLOWED_SP = {
 def allowed_patterns(fft_size: int) -> frozenset:
     """Scattered-pilot patterns allowed for an FFT size (A/322 Table 8.3 union)."""
     return ALLOWED_SP[fft_size]
+
+
+# ===========================================================================
+# Convolutional Time Interleaver (A/322 7.1.4, Table 9.24)
+# ===========================================================================
+#: L1D_plp_CTI_depth signalling value -> Nrows (non-extended interleaving),
+#: A/322 Table 9.24.  Values 4..7 are reserved.
+CTI_NROWS = {0: 512, 1: 724, 2: 887, 3: 1024}
+
+#: Same, for extended interleaving (QPSK only, never with LDM), A/322 7.1.3
+#: and Table 9.24 (depth 010 -> 1254, 011 -> 1448).
+CTI_NROWS_EXTENDED = {0: 512, 1: 724, 2: 1254, 3: 1448}
+
+
+def cti_nrows(depth: int, extended: bool = False) -> int:
+    """Number of CTI delay lines from ``L1D_plp_CTI_depth`` (A/322 Table 9.24)."""
+    table = CTI_NROWS_EXTENDED if extended else CTI_NROWS
+    if depth not in table:
+        raise ValueError(f"L1D_plp_CTI_depth {depth} is reserved (A/322 Table 9.24)")
+    return table[depth]
+
+
+# ===========================================================================
+# Layered Division Multiplexing (A/322 6.4)
+# ===========================================================================
+#: L1D_plp_ldm_injection_level signalling value -> Enhanced Layer injection
+#: level below the Core Layer, in dB (A/322 Table 9.22).  Value 31 is reserved.
+LDM_INJECTION_DB = {
+    0: 0.0, 1: 0.5, 2: 1.0, 3: 1.5, 4: 2.0, 5: 2.5, 6: 3.0, 7: 3.5,
+    8: 4.0, 9: 4.5, 10: 5.0, 11: 6.0, 12: 7.0, 13: 8.0, 14: 9.0,
+    15: 10.0, 16: 11.0, 17: 12.0, 18: 13.0, 19: 14.0, 20: 15.0,
+    21: 16.0, 22: 17.0, 23: 18.0, 24: 19.0, 25: 20.0, 26: 21.0,
+    27: 22.0, 28: 23.0, 29: 24.0, 30: 25.0,
+}
+
+
+@dataclass(frozen=True)
+class LdmPower:
+    """Layer power distribution for one Enhanced Layer injection level.
+
+    Source: A/322 Table 6.15 (power ratios) and Table 6.16 (the injection-level
+    controller scaling factor ``alpha`` and the power normalizer ``beta``).
+
+    Attributes:
+        injection_db: Enhanced Layer level below the Core Layer, in dB.
+        core_ratio: Core Layer share of total power (Table 6.15), linear.
+        enhanced_ratio: Enhanced Layer share of total power (Table 6.15), linear.
+        alpha: injection-level controller scaling factor (Table 6.16).
+        beta: power normalizer factor (Table 6.16).
+    """
+    injection_db: float
+    core_ratio: float
+    enhanced_ratio: float
+    alpha: float
+    beta: float
+
+
+def _power_ratios(injection_db: float) -> tuple:
+    """Core/Enhanced power split for an injection level (A/322 Table 6.15)."""
+    e = 10.0 ** (-injection_db / 10.0)
+    core = 1.0 / (1.0 + e)
+    return core, 1.0 - core
+
+
+#: A/322 Table 6.16: injection level (dB) -> (scaling factor alpha, normalizing
+#: factor beta).  The Core/Enhanced power ratios follow from Table 6.15 and are
+#: derived in :func:`ldm_power`.
+_LDM_ALPHA_BETA = {
+    0.0: (1.0000000, 0.7071068), 0.5: (0.9440609, 0.7271524),
+    1.0: (0.8912509, 0.7465331), 1.5: (0.8413951, 0.7651789),
+    2.0: (0.7943282, 0.7830305), 2.5: (0.7498942, 0.8000406),
+    3.0: (0.7079458, 0.8161736), 3.5: (0.6683439, 0.8314061),
+    4.0: (0.6309573, 0.8457262), 4.5: (0.5956621, 0.8591327),
+    5.0: (0.5623413, 0.8716346), 6.0: (0.5011872, 0.8940022),
+    7.0: (0.4466836, 0.9130512), 8.0: (0.3981072, 0.9290819),
+    9.0: (0.3548134, 0.9424353), 10.0: (0.3162278, 0.9534626),
+    11.0: (0.2818383, 0.9625032), 12.0: (0.2511886, 0.9698706),
+    13.0: (0.2238721, 0.9758449), 14.0: (0.1995262, 0.9806699),
+    15.0: (0.1778279, 0.9845540), 16.0: (0.1584893, 0.9876723),
+    17.0: (0.1412538, 0.9901705), 18.0: (0.1258925, 0.9921685),
+    19.0: (0.1122018, 0.9937642), 20.0: (0.1000000, 0.9950372),
+    21.0: (0.0891251, 0.9960519), 22.0: (0.0794328, 0.9968601),
+    23.0: (0.0707946, 0.9975034), 24.0: (0.0630957, 0.9980154),
+    25.0: (0.0562341, 0.9984226),
+}
+
+
+def ldm_power(injection_db: float) -> LdmPower:
+    """Layer power distribution at an Enhanced Layer injection level.
+
+    Args:
+        injection_db: Enhanced Layer level below the Core Layer (dB); one of the
+            A/322 Table 9.22 values.
+
+    Returns:
+        :class:`LdmPower` (A/322 Tables 6.15 and 6.16).
+    """
+    if injection_db not in _LDM_ALPHA_BETA:
+        raise ValueError(f"injection level {injection_db} dB not tabulated")
+    core, enhanced = _power_ratios(injection_db)
+    alpha, beta = _LDM_ALPHA_BETA[injection_db]
+    return LdmPower(injection_db=injection_db, core_ratio=core,
+                    enhanced_ratio=enhanced, alpha=alpha, beta=beta)
+
+
+def cti_start_c(fec_block_start: int, start_row: int, nrows: int) -> int:
+    """Solve A/322 9.3.9.1 for ``C``, the pre-CTI first-FEC-Block offset.
+
+    The transmitter signals::
+
+        L1D_plp_CTI_fec_block_start = C + Nrows * ((start_row + C) mod Nrows)
+
+    which inverts to the equation below.  A valid ``C`` lies in
+    ``[0, cells_per_FEC_Block)``; that bound is the CTI reading's gate.
+    """
+    r = (start_row + fec_block_start) % nrows
+    return fec_block_start - nrows * r
 
 # ===========================================================================
 # Large tables are defined in their own modules and re-exported here so callers

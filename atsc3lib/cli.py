@@ -12,7 +12,8 @@ import logging
 import sys
 
 from . import spec
-from .receiver import decode_capture, decode_plp_payload
+from .receiver import decode_capture, decode_plp_payload, decode_cti_plp_streams
+from .payload import TI_CTI
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,14 @@ def decode_main(argv=None):
                         help='subframe whose PLP to decode (default 0)')
     parser.add_argument('--no-payload', action='store_true',
                         help='decode signalling only, skip the PLP payload')
+    parser.add_argument('--frames', type=int, default=6,
+                        help='frames to gather for a CTI-mode (TI mode 1) PLP')
+    parser.add_argument('--no-fine-timing', action='store_true',
+                        help='do not refine the FFT window off the scattered '
+                             'pilots (A/322 8.1.3.1)')
+    parser.add_argument('--no-cpe', action='store_true',
+                        help='do not run the decision-directed per-symbol '
+                             'common-phase correction')
     parser.add_argument('-v', '--verbose', action='store_true')
 
     args = parser.parse_args(argv)
@@ -84,23 +93,39 @@ def decode_main(argv=None):
         from .frontend import read_hackrf_iq
         from .payload import decode_streams
         iq = read_hackrf_iq(args.file)
-        _, payload = decode_plp_payload(
-            iq, args.rate, plp_id=args.plp, subframe=args.subframe,
-            max_iterations=args.max_iterations, result=result)
-        if payload is None:
-            print(f"  Payload: no PLP decoded in subframe {args.subframe}")
+        sf = result.l1_detail.subframes[args.subframe]
+        cti = any(p.ti_mode == TI_CTI for p in sf['plps'] if p.layer == 0)
+        if cti:
+            result, decoded, streams = decode_cti_plp_streams(
+                iq, args.rate, plp_id=args.plp, n_frames=args.frames,
+                max_iterations=args.max_iterations, result=result,
+                fine_timing=not args.no_fine_timing,
+                cpe=not args.no_cpe)
+            if decoded is None:
+                print(f"  Payload: no CTI PLP decoded in subframe {args.subframe}")
+                return 0
+            print(f"  Payload: PLP {decoded.payload.plp_id}, CTI Nrows "
+                  f"{decoded.nrows}, C {decoded.c_offset}, "
+                  f"{decoded.payload.n_converged}/{decoded.n_blocks} FEC "
+                  f"blocks converged")
         else:
+            _, payload = decode_plp_payload(
+                iq, args.rate, plp_id=args.plp, subframe=args.subframe,
+                max_iterations=args.max_iterations, result=result)
+            if payload is None:
+                print(f"  Payload: no PLP decoded in subframe {args.subframe}")
+                return 0
             print(f"  Payload: PLP {payload.plp_id}, "
                   f"{payload.n_converged}/{payload.n_fec} FEC blocks converged")
             streams = decode_streams(payload)
-            print(f"  Streams: {len(streams.packets)} ALP packet(s), "
-                  f"{len(streams.datagrams)} UDP datagram(s), "
-                  f"{len(streams.lls)} LLS table(s)")
-            for t in streams.lls:
-                print(f"    LLS table 0x{t.table_id:02x} ({t.name}): "
-                      f"{len(t.data)} bytes")
-            if streams.alp_stats.resync:
-                print(f"    (ALP resyncs: {streams.alp_stats.resync})")
+        print(f"  Streams: {len(streams.packets)} ALP packet(s), "
+              f"{len(streams.datagrams)} UDP datagram(s), "
+              f"{len(streams.lls)} LLS table(s)")
+        for t in streams.lls:
+            print(f"    LLS table 0x{t.table_id:02x} ({t.name}): "
+                  f"{len(t.data)} bytes")
+        if streams.alp_stats.resync:
+            print(f"    (ALP resyncs: {streams.alp_stats.resync})")
     return 0
 
 

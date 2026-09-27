@@ -36,7 +36,7 @@ from .pilot_reference import (
 from .preamble import (
     carrier_shift, preamble_noc, common_continual_pilots, preamble_data_mask,
     preamble_pilot_values, estimate_preamble_channel, preamble_data_cells,
-    preamble_symbol_spectrum, preamble_l1_cells,
+    preamble_symbol_spectrum, preamble_l1_cells, pilot_coherence,
 )
 from .frequency_interleaver import (
     generate_addresses, interleave as freq_interleave,
@@ -70,6 +70,8 @@ from .payload import (
     data_symbol_cells, qpsk_demap_llr, CellPool, QPSK_POINTS, PlpPayload,
     decode_subframe0_qpsk_plp, decode_subframe0_plp, decode_subframe_plp,
     decode_plp_from_pool, DecodedStreams, decode_streams,
+    FineTiming, CpeSpec, fine_timing, subframe_fine_timing, cpe_correct,
+    scattered_pilot_coherence, cpe_spec, plp_alphabet, dummy_cell_values,
 )
 
 # Pilot / data-cell tables (A/322 Annex D/F), fetched from the pinned source
@@ -116,6 +118,7 @@ __all__ = [
     "preamble_data_cells",
     "preamble_symbol_spectrum",
     "preamble_l1_cells",
+    "pilot_coherence",
     "generate_addresses",
     "freq_interleave",
     "freq_deinterleave",
@@ -158,6 +161,15 @@ __all__ = [
     "decode_plp_from_pool",
     "DecodedStreams",
     "decode_streams",
+    "FineTiming",
+    "CpeSpec",
+    "fine_timing",
+    "subframe_fine_timing",
+    "cpe_correct",
+    "scattered_pilot_coherence",
+    "cpe_spec",
+    "plp_alphabet",
+    "dummy_cell_values",
     # receiver
     "decode_signaling",
     "decode_capture",

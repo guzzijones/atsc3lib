@@ -124,17 +124,30 @@ counting frame symbols (so subframe 0's first data symbol has origin NP).  RF30
 air.
 
 PLP 0 (64QAM-NUC 11/15) of the RF33 multiplex sits at the ~18.8 dB AWGN
-threshold and the available captures measure ~15.9 dB MER, so it does not
+threshold; on the solid feed the cells measure **16.0 dB MER**, so it does not
 converge in either this receiver or the independent reference (0/74 FEC
-blocks).  Subframe 1's PLP 1 (256QAM-NUC 11/15, 64800) needs ~22 dB MER, which
-requires line-of-sight to the transmitter; this installation has no LOS, so
-**256QAM and every other LOS-dependent feature are out of scope by decision**.
-Subframe 1 is therefore gated structurally: its 16K cell pool closes exactly
-(956179 cells) and the pilot/data-cell identity holds, rather than on PLP-1
-payload bits.  The PLP-0 shortfall is a link-margin limit, not a chain error;
-the chains are verified bit-exact against reference-encoded cells.
+blocks).  Subframe 1's PLP 1 (256QAM-NUC 11/15, 64800) needs ~22 dB MER and the
+same feed measures **20.6 dB** — ~2.5 dB short of 64QAM and ~1.4 dB short of
+256QAM, with no LOS to close it.  Both shortfalls are **link-margin limits, not
+chain errors**: the chains are verified bit-exact against reference-encoded
+cells, and the MER is measured against each MODCOD's own alphabet.  Therefore
+**256QAM and every other margin-gated feature are out of scope by decision**,
+and subframe 1 is gated structurally — its 16K cell pool closes exactly (956179
+cells) and the pilot/data-cell identity holds — rather than on PLP-1 payload
+bits.
 
 RF30/RF25 payloads sit behind **LDM** (two layers on shared cells),
-**CTI** (convolutional time interleaving, A/322 7.1.4) and Ninner = 64800; those
-chains are not yet implemented.  RF30's PLP-1 (64QAM-NUC 6/15) is in scope;
-RF25's is 256QAM (LOS, out of scope).
+**CTI** (convolutional time interleaving, A/322 7.1.4) and Ninner = 64800.  The
+structural chain is implemented and gated: `cti.py` implements the A/322 7.1.4
+de-interleaver and its 9.3.9.1 signalled identity, `spec.py` carries the
+Table 9.24 `Nrows` menu and the Table 9.22/6.15/6.16 LDM power ratios, and the
+demodulator gained the two front-end stages the RF33-class path never needed —
+scattered-pilot **fine timing** (8.1.3.1, `subframe_fine_timing`) and a
+decision-directed per-symbol **CPE** (7.2.6.5 dummy tail where present,
+`cpe_correct`).  Both are gated synthetically and on real RF33, and are on by
+default for the CTI path (`decode_cti_plp_streams`; `--no-fine-timing`,
+`--no-cpe` to disable).  RF30's PLP-1 (64QAM-NUC 6/15) is in scope; RF25's is
+256QAM (out of scope, see above).  RF30's core layer is not yet decoded here
+because the available RF30 captures are link-limited (preamble coherence 0.825,
+versus 0.96-0.98 on RF33 with the same radio/feed), not because of a chain gap;
+those RF30 captures have been removed so they are not mistaken for a fixture.

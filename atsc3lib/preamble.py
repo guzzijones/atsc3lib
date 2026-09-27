@@ -131,6 +131,29 @@ def common_continual_pilots(noc: int) -> np.ndarray:
     return cp8 - origin
 
 
+def pilot_coherence(carriers: np.ndarray, dx: int,
+                    amplitude: float) -> float:
+    """Preamble pilot-coherence score of one FFT window (fine-timing ruler).
+
+    A/322 8.1.6.1 fixes the Preamble pilot lattice (DY = 1, ``k mod DX == 0``)
+    and 8.1.6.3 their known ``+/-A`` values, so ``received / known`` is the
+    channel response, which is smooth along ``k``.  Scoring
+
+        C = |sum_j q_j conj(q_{j+1})| / sum_j |q_j|^2
+
+    over consecutive pilots fits no parameters, so it cannot be inflated by the
+    search that reads it: a wrong carrier origin (hence a wrong sign pattern)
+    leaves random flips and a rough quotient.  It is flat over the guard
+    interval, so it locates the window to within one GI and no finer.
+    """
+    pilots = preamble_pilot_indices(len(carriers), dx)
+    known = preamble_pilot_values(len(carriers), dx, amplitude)
+    q = carriers[pilots] / known
+    num = np.abs(np.sum(q[:-1] * np.conj(q[1:])))
+    den = np.sum(np.abs(q) ** 2)
+    return float(num / max(den, 1e-30))
+
+
 def estimate_preamble_channel(carriers: np.ndarray, dx: int,
                               amplitude: float) -> np.ndarray:
     """Estimate the channel frequency response across all carriers.
