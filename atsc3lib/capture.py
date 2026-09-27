@@ -1,7 +1,8 @@
-"""Capture IQ samples using any SDR device.
+"""Capture IQ samples using an SDR device.
 
-Supports any SDR with a command-line capture tool that outputs raw IQ samples.
-Tested with: HackRF, RTL-SDR, Airspy, SDRplay, USRP.
+An ATSC 3.0 channel occupies 6 MHz, so the capture device must be wider than
+that before resampling.  The HackRF (10-20 MHz) qualifies; RTL-SDR does not
+(2.4 MHz) and is not supported.
 """
 
 import subprocess
@@ -28,7 +29,7 @@ def capture(
         output_file: Output file path
         duration_sec: Capture duration in seconds
         gain_db: RX gain (device-dependent default if None)
-        device_type: Force specific device ('hackrf', 'rtl', 'airspy', etc.)
+        device_type: Force specific device ('hackrf', 'airspy', 'soapysdr')
         device_index: Device index (for multiple devices)
     
     Returns:
@@ -39,7 +40,7 @@ def capture(
     
     if not available_tools:
         raise RuntimeError(
-            "No SDR tools found. Install one of: hackrf, rtl-sdr, airspy, SoapySDR"
+            "No SDR tools found. Install one of: hackrf, airspy, SoapySDR"
         )
     
     # Use specified device or first available
@@ -51,8 +52,6 @@ def capture(
     # Capture with detected tool
     if tool == 'hackrf':
         _capture_hackrf(freq_hz, sample_rate, gain_db, duration_sec, output_file)
-    elif tool == 'rtl':
-        _capture_rtl(freq_hz, sample_rate, gain_db, duration_sec, output_file, device_index)
     elif tool == 'airspy':
         _capture_airspy(freq_hz, sample_rate, gain_db, duration_sec, output_file)
     else:
@@ -67,9 +66,6 @@ def _detect_sdr_tools() -> dict:
     
     if shutil.which('hackrf_transfer'):
         tools['hackrf'] = 'HackRF'
-    
-    if shutil.which('rtl_sdr'):
-        tools['rtl'] = 'RTL-SDR'
     
     if shutil.which('airspy_rx'):
         tools['airspy'] = 'Airspy'
@@ -96,23 +92,6 @@ def _capture_hackrf(freq_hz, sample_rate, gain_db, duration_sec, output_file):
     subprocess.run(cmd, check=True)
 
 
-def _capture_rtl(freq_hz, sample_rate, gain_db, duration_sec, output_file, device_index):
-    """Capture using RTL-SDR."""
-    gain = gain_db if gain_db else 49.6
-    cmd = [
-        "rtl_sdr",
-        "-d", str(device_index),
-        "-r", output_file,
-        "-f", str(freq_hz),
-        "-s", str(sample_rate),
-        "-g", str(gain),
-    ]
-    try:
-        subprocess.run(cmd, check=True, timeout=duration_sec + 5)
-    except subprocess.TimeoutExpired:
-        pass  # Expected
-
-
 def _capture_airspy(freq_hz, sample_rate, gain_db, duration_sec, output_file):
     """Capture using Airspy."""
     gain = int(gain_db) if gain_db else 10
@@ -129,20 +108,21 @@ def _capture_airspy(freq_hz, sample_rate, gain_db, duration_sec, output_file):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Capture IQ samples from any SDR device",
+        description="Capture IQ samples from an SDR device",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   atsc3-capture -f 569 -o out/capture.iq          # Auto-detect device
   atsc3-capture -f 569 -t hackrf -g 32            # Force HackRF
-  atsc3-capture -f 575 -t rtl -d 1 -g 49.6        # RTL-SDR device 1
   atsc3-capture -f 605 --duration 30              # 30 second capture
 
 Supported devices (auto-detected):
   - HackRF (hackrf_transfer)
-  - RTL-SDR (rtl_sdr)
   - Airspy (airspy_rx)
   - Any SoapySDR device
+
+The device must be wider than the 6 MHz ATSC 3.0 channel; RTL-SDR (2.4 MHz)
+is not wide enough and is not supported.
         """
     )
     
@@ -154,7 +134,7 @@ Supported devices (auto-detected):
                         help="Duration in seconds")
     parser.add_argument("-g", "--gain", type=float, default=None,
                         help="RX gain (auto if not specified)")
-    parser.add_argument("-t", "--type", choices=['hackrf', 'rtl', 'airspy', 'soapysdr'],
+    parser.add_argument("-t", "--type", choices=['hackrf', 'airspy', 'soapysdr'],
                         help="Force device type (auto-detect if not specified)")
     parser.add_argument("-i", "--device-index", type=int, default=0,
                         help="Device index (for multiple devices)")
@@ -172,9 +152,7 @@ Supported devices (auto-detected):
     # Default sample rates by device type
     sample_rate = args.sample_rate
     if sample_rate is None:
-        if args.type == 'rtl':
-            sample_rate = 2_400_000
-        elif args.type == 'airspy':
+        if args.type == 'airspy':
             sample_rate = 2_500_000
         else:
             sample_rate = 10_000_000  # HackRF default

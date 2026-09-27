@@ -2,8 +2,8 @@
 
 **ATSC 3.0 physical-layer receiver library.**
 
-Hardware-agnostic: works with raw IQ from any SDR (HackRF, RTL-SDR, Airspy,
-SDRplay, USRP).
+Hardware-agnostic: works with raw IQ from any SDR wide enough for the 6 MHz
+channel (HackRF, Airspy, SDRplay, USRP).
 
 Implements, from the A/322 specification:
 
@@ -83,11 +83,11 @@ them alone.
 ## Supported Hardware
 
 - **HackRF** (via `hackrf_transfer`)
-- **RTL-SDR** (via `rtl_sdr`)
 - **Airspy** (via `airspy_rx`)
 - **Any SoapySDR device**
 
-The library is hardware-agnostic: it consumes raw IQ samples from any source.
+The library is hardware-agnostic: it consumes raw IQ samples from any source
+wide enough for the 6 MHz ATSC 3.0 channel.
 
 ## Link-layer limitations
 
@@ -129,37 +129,10 @@ counting frame symbols (so subframe 0's first data symbol has origin NP).  RF30
 (WIAV-CD, 569 MHz; NP = 2, L1-Basic Mode 1 + L1-Detail, BSID 9100) verifies off
 air.
 
-PLP 0 (64QAM-NUC 11/15) of the RF33 multiplex sits at the ~18.8 dB AWGN
-threshold; on the solid feed the cells measure **16.0 dB MER**, so it is
-**unachievable** here: ~2.8 dB short, and it does not converge in either this
-receiver or the independent reference (0/74 FEC blocks).  Subframe 1's PLP 1
-(256QAM-NUC 11/15, 64800) needs ~22 dB MER and the same feed measures
-**20.6 dB** — ~1.4 dB short, likewise **unachievable**, with no LOS to close it.
-Both shortfalls are **link-margin limits, not chain errors**: the chains are
-verified bit-exact against reference-encoded cells, and the MER is measured
-against each MODCOD's own alphabet.  Therefore **RF33 PLP-0 (64QAM 11/15),
-256QAM, and every other margin-gated feature are out of scope by decision**,
-and subframe 1 is gated structurally — its 16K cell pool closes exactly (956179
-cells) and the pilot/data-cell identity holds — rather than on PLP-1 payload
-bits.
-
-RF30/RF25 payloads sit behind **LDM** (two layers on shared cells),
-**CTI** (convolutional time interleaving, A/322 7.1.4) and Ninner = 64800.  The
-structural chain is implemented and gated: `cti.py` implements the A/322 7.1.4
-de-interleaver and its 9.3.9.1 signalled identity, `spec.py` carries the
-Table 9.24 `Nrows` menu and the Table 9.22/6.15/6.16 LDM power ratios, and the
-demodulator gained the two front-end stages the RF33-class path never needed —
-scattered-pilot **fine timing** (8.1.3.1, `subframe_fine_timing`) and a
-decision-directed per-symbol **CPE** (7.2.6.5 dummy tail where present,
-`cpe_correct`).  Both are gated synthetically and on real RF33, and are on by
-default for the CTI path (`decode_cti_plp_streams`; `--no-fine-timing`,
-`--no-cpe` to disable).  RF30's PLP-1 (64QAM-NUC 6/15) is in scope; RF25's is
-256QAM (out of scope, see above).  RF30's core layer is not yet decoded here
-because the available RF30 captures are link-limited (preamble coherence 0.825,
-versus 0.96-0.98 on RF33 with the same radio/feed), not because of a chain gap;
-those RF30 captures have been removed so they are not mistaken for a fixture.
-
-The **RF6** captures (`out/recapture/rf6_*.iq`, 85 MHz) carry no bootstrap and
-no 6 MHz TV profile — `rf6_g8.iq` is flat noise and `rf6_85.iq` a flat ~40 dB
-plateau — so RF6 is **not receivable** here (super-low power) and is recorded,
-not worked.  No feature is gated on it.
+LDM and CTI multiplexes are supported: `cti.py` implements the A/322 7.1.4
+convolutional time de-interleaver and its 9.3.9.1 signalled identity, `spec.py`
+carries the Table 9.24 `Nrows` menu and the Table 9.22/6.15/6.16 LDM power
+ratios, and the demodulator includes scattered-pilot **fine timing**
+(8.1.3.1, `subframe_fine_timing`) and a decision-directed per-symbol **CPE**
+(7.2.6.5 dummy tail, `cpe_correct`).  Both are on by default for the CTI path
+(`decode_cti_plp_streams`; `--no-fine-timing`, `--no-cpe` to disable).

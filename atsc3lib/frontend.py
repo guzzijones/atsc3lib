@@ -7,9 +7,9 @@ Sample rates (A/322 Annex N.2.2):
 - The main OFDM signal uses 0.384 * (bsr_coefficient + 16) MHz; for the
   default bsr_coefficient = 2 this is 6.912 MHz.
 
-A capture taken at an arbitrary SDR rate (e.g. 10 MHz for HackRF or 2.4 MHz
-for RTL-SDR) must be resampled to 6.144 MHz before bootstrap detection, then
-resampled again / decimated to 6.912 MHz for OFDM demodulation.
+A capture taken at an arbitrary SDR rate (e.g. 10 MHz for HackRF) must be
+resampled to 6.144 MHz before bootstrap detection, then resampled again /
+decimated to 6.912 MHz for OFDM demodulation.
 """
 
 from dataclasses import dataclass
