@@ -84,6 +84,39 @@ class TestCellInterleaver:
 
 
 class TestDataPlpChain:
+    def test_decode_cells_scale_invariant(self):
+        # A/322 Annex C alphabets are unit-power; the equaliser output is not.
+        # Scaling a whole FEC block must not change the decode (regression for
+        # the demapper's min-distance sigma2, which is not scale-free).
+        from atsc3lib.ldpc_exact import ATSC3LDPCExact
+        from atsc3lib.group_interleaver import GroupInterleaver
+        from atsc3lib.bch import BCHCode
+        rate, mod, ninner = 11, '256QAM', 64800
+        rng = np.random.default_rng(20260926)
+        chain = DataPlpChain(mod=mod, rate=rate, ninner=ninner)
+        ldpc = ATSC3LDPCExact(rate, n=ninner)
+        bch = BCHCode(ninner, chain.bch.t)
+        kpayload = ldpc.K - bch.mouter
+        msg = rng.integers(0, 2, kpayload).astype(np.uint8)
+        info = np.asarray(bch.encode(list(msg)), dtype=np.uint8)
+        assert len(info) == ldpc.K
+        cw = ldpc.encode(info)
+        order = np.asarray(GroupInterleaver(rate, mod, n=ninner).order)
+        bits = cw[order]
+        labels = bits.reshape(-1, 8)
+        # y0 is the MSB (A/322 6.3.3); index = sum y_i << (7 - i).
+        idx = np.zeros(len(labels), dtype=int)
+        for i in range(8):
+            idx = (idx << 1) | labels[:, i].astype(int)
+        cells = nuc.points(8, rate)[idx]
+        base = chain.decode_cells(cells)
+        assert base.converged and base.bch_ok
+        for scale in (0.6, 0.87, 1.3, 2.0):
+            got = chain.decode_cells(cells * scale)
+            assert got.converged and got.bch_ok
+            assert np.array_equal(np.asarray(got.payload_bits),
+                                  np.asarray(base.payload_bits))
+
     @pytest.mark.skipif(not os.path.exists(_HTI_CELLS),
                         reason="oracle fixture not present")
     def test_plp0_hti_roundtrip(self):

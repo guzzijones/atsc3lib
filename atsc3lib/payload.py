@@ -463,7 +463,17 @@ class DataPlpChain:
         self.cells_per_fec = ninner // self.mod_bits
 
     def decode_cells(self, cells: np.ndarray, alpha: float = None) -> FecBlock:
-        """Decode one FEC block (``cells`` of length ``cells_per_fec``)."""
+        """Decode one FEC block (``cells`` of length ``cells_per_fec``).
+
+        The A/322 Annex C NUC alphabets have unit average power, but an
+        equalised cell block does not (it carries the residual channel gain);
+        the max-log metric is not invariant to that scale, so the block is
+        normalised to unit mean power before demapping.
+        """
+        cells = np.asarray(cells, dtype=np.complex128)
+        power = float(np.mean(np.abs(cells) ** 2))
+        if power > 0.0:
+            cells = cells / np.sqrt(power)
         q = nuc.demap_llr(cells, self.mod_bits, self.rate)   # q > 0 => bit 0
         llr = np.empty(self.ninner)
         llr[self.order] = -q                                 # decoder: >0 => bit 1

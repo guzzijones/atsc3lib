@@ -111,6 +111,23 @@ MODCODs.  TI mode 2 supports the A/322 7.1.5.4 twisted block interleaver and
 the optional A/322 7.1.5.2 **cell** interleaver
 (`L1D_plp_HTI_cell_interleaver`); TI modes 0/1 are supported.
 
+**Off air, RF33 (587 MHz, BSID 540) is the DC lighthouse multiplex and it
+decodes.**  PLP-0 (64QAM-NUC 11/15) converges 53-60 of 74 FEC blocks from a
+clean capture and yields real LLS: the A/331 **SLT** (`bsid="540"`) and
+SystemTime.  The SLT lists the major services carried by the multiplex
+(32-1 WHUT, 7-1 WJLA, 5-1 WTTG, 4-1 WRC, 9-1 WUSA, plus the Sinclair broadband
+services 7-10/7-11/7-20/7-21).  This is the first off-air service list, and it
+replaces the earlier "padding-only, link-limited" conclusion.
+
+The scale bug that hid this: the A/322 Annex C NUC alphabets have unit average
+power, but an equalised cell block does not (RF33's cell pool is ~0.87, subframe
+1's ~0.60), and the max-log metric is not invariant to that scale.  Every data
+FEC block is therefore normalised to unit mean power before demapping
+(`DataPlpChain.decode_cells`); without it PLP-0 decodes 0/74, with it 53-60/74.
+The decision-directed CPE happened to normalise internally, which masked the
+defect whenever CPE was on.  The property is gated by
+`tests/test_data_plp.py::test_decode_cells_scale_invariant`.
+
 Payload demodulation works on any subframe.  Subframe 0 carries the Preamble
 spare cells; later subframes are demodulated at their own FFT/GI/pilot geometry
 with the A/322 7.3 frequency-interleaver counter reset at the subframe boundary.
