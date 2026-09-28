@@ -3,10 +3,9 @@
 Implements A/322 Annex C constellation position vectors and the Section 6.3
 max-log demapper used by data PLPs.
 
-The numeric tables are shipped as a banked artifact
-(``data/nuc_a322.npz``) extracted from the A/322 specification; the position
-vectors are facts and the quadrant rule below reconstructs the full alphabet
-from the ``w`` vectors the tables print.
+The numeric ``w`` vectors are shipped inlined in :mod:`atsc3lib.nuc_tables`;
+the position vectors are facts and the quadrant rule below reconstructs the
+full alphabet from the ``w`` vectors the tables print.
 
 A/322 6.3.4.2 quadrant rule, with ``b = M/4``::
 
@@ -23,13 +22,11 @@ tabulated in Annex C.
 Reference: ATSC A/322:2024-04, Section 6.3, Annex C.
 """
 
-import os
 from typing import Dict, Tuple
 
 import numpy as np
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-_BANK = os.path.join(_DATA_DIR, 'nuc_a322.npz')
+from .nuc_tables import W_VECTORS
 
 # Modulation order (bits per symbol) by L1D_plp_mod signalling value.
 # A/322 Table 9.8: 0 QPSK, 1 16QAM-NUC, 2 64QAM-NUC, 3 256QAM-NUC,
@@ -75,7 +72,6 @@ def _quadrant(w: np.ndarray) -> np.ndarray:
 
 _CACHE: Dict[Tuple[int, int], np.ndarray] = {}
 
-
 def points(mod_order: int, rate: int) -> np.ndarray:
     """Constellation positions for a (modulation order, code rate).
 
@@ -97,8 +93,7 @@ def points(mod_order: int, rate: int) -> np.ndarray:
     key = (mod_order, rate)
     if key not in _CACHE:
         table = _TABLE[m][0 if rate <= 7 else 1]
-        bank = np.load(_BANK)
-        w = bank[_bank_key(table, rate)]
+        w = np.array(W_VECTORS[_bank_key(table, rate)])
         _CACHE[key] = _quadrant(w)
     return _CACHE[key]
 

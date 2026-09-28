@@ -3,9 +3,9 @@
 WHY
 ---
 The A/322 6.2 bit interleaver permutes 360-bit groups per (modulation, code
-rate); the permutation is printed in Annex B.1 (Tables B.1.1-B.1.6) and is not
-in the repository.  This tool extracts those permutations once, gates them,
-and writes ``atsc3lib/data/group_interleaver_64800.json``.
+rate); the permutation is printed in Annex B.1 (Tables B.1.1-B.1.6).  This
+tool extracts those permutations once, gates them, and writes
+``atsc3lib/group_tables.py`` (which also holds the inlined short-frame tables).
 
 EXTRACTION DISCIPLINE
 ---------------------
@@ -26,13 +26,12 @@ G3  Ngroup values per tabulated rate
 Usage:
     python tools/extract_bicm.py [pdf] [out]
 The pdf argument is optional: when omitted the official A/322 PDF is fetched
-to a local cache (see ``tools/spec_sources.py``) and the banked
-``atsc3lib/data/group_interleaver_64800.json`` is overwritten.
+to a local cache (see ``tools/spec_sources.py``) and the inlined
+``atsc3lib/group_tables.py`` is overwritten.
 Requires PyMuPDF (`pip install pymupdf`).
 """
 
 import argparse
-import json
 import os
 from dataclasses import dataclass
 from typing import Dict, List
@@ -62,10 +61,10 @@ RATES = list(range(RATE_MIN, RATE_MAX + 1))
 #: checksum of the column ordering).
 IDENTITY = list(range(NGROUP))
 
-#: Default output path: the banked normal-frame table in the package.
+#: Default output path: the inlined table module in the package.
 DEFAULT_OUT = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
-    'atsc3lib', 'data', 'group_interleaver_64800.json')
+    'atsc3lib', 'group_tables.py')
 
 
 @dataclass(frozen=True)
@@ -101,12 +100,43 @@ def gate(block: AnnexBlock) -> None:
             f"rate {rate}: not a permutation of 0..{NGROUP - 1}")
 
 
+def _write_group_module(path, short_tables, normal_tables, ninner, ngroup):
+    header = (
+        '"""A/322 Annex B group-wise bit-interleaver tables (short and normal).\n'
+        '\n'
+        'Extracted from ATSC A/322:2024-04 Annex B.  Keyed ``[modulation][rate]``\n'
+        'with a tuple of Ngroup = Ninner/360 group indices (a permutation of\n'
+        '0..Ngroup-1).  Modulation keys are the numeric Annex B.2 order\n'
+        '``1``=QPSK, ``2``=16QAM, ``3``=64QAM, ``4``=256QAM for short frames and\n'
+        'the named strings for normal frames.\n'
+        '"""\n'
+        '\n'
+    )
+    out = [header, 'GROUP_TABLES_16200 = {\n']
+    for mod in sorted(short_tables, key=int):
+        d = short_tables[mod]
+        out.append(f'    {mod}: {{\n')
+        for rate in sorted(d, key=int):
+            out.append(f'        {rate}: ({", ".join(str(x) for x in d[rate])},),\n')
+        out.append('    },\n')
+    out.append('}\n\nGROUP_TABLES_64800 = {\n')
+    for mod in normal_tables:
+        d = normal_tables[mod]
+        out.append(f'    {mod!r}: {{\n')
+        for rate in sorted(d, key=int):
+            out.append(f'        {rate}: ({", ".join(str(x) for x in d[rate])},),\n')
+        out.append('    },\n')
+    out.append('}\n')
+    with open(path, 'w') as f:
+        f.write(''.join(out))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("pdf", nargs="?", default=None,
                     help="A/322 PDF (default: fetch the official copy)")
     ap.add_argument("out", nargs="?", default=DEFAULT_OUT,
-                    help="output JSON (default: the banked table)")
+                    help="output Python module (default: the inlined table)")
     args = ap.parse_args(argv)
 
     doc = pymupdf.open(pdf_path(A322, args.pdf))
@@ -114,12 +144,12 @@ def main(argv=None):
     for mod, pages in TABLE_PAGES.items():
         block = AnnexBlock(parse_modulation(doc, pages))
         gate(block)
-        out[mod] = {str(rate): block.tables[rate] for rate in RATES}
+        out[mod] = {rate: tuple(block.tables[rate]) for rate in RATES}
         print(f"{mod}: {len(RATES)} rates x {NGROUP} groups, gated")
     doc.close()
 
-    with open(args.out, "w") as f:
-        json.dump({'Ninner': NINNER_NORMAL, 'Ngroup': NGROUP, 'tables': out}, f)
+    from atsc3lib.group_tables import GROUP_TABLES_16200
+    _write_group_module(args.out, GROUP_TABLES_16200, out, NINNER_NORMAL, NGROUP)
     print(f"wrote {args.out}")
 
 

@@ -1,12 +1,12 @@
-"""Cross-check the banked A/322 Annex A/B tables against an independent source.
+"""Cross-check the inlined A/322 Annex A/B tables against an independent source.
 
 WHY
 ---
-The banked JSON under ``atsc3lib/data/`` is extracted from the A/322 PDF by
-``extract_ldpc64k.py`` / ``extract_bicm.py``; the specification is the ground
-truth.  A mistake in the PDF column split would be invisible to the extractor's
-own gates, so this tool re-derives the same tables from an independent public
-transcription and asserts element-for-element equality.
+The inlined tables (``atsc3lib.ldpc_tables`` / ``atsc3lib.group_tables``) are
+the ground truth from the A/322 PDF; a mistake in the PDF column split would be
+invisible to the extractor's own gates, so this tool re-derives the same tables
+from an independent public transcription and asserts element-for-element
+equality.
 
 The reference is ``drmpeg/gr-atsc3`` (GPL-3.0), a GNU Radio ATSC 3.0
 transmitter, pinned to a known commit.  Only the numeric standard tables are
@@ -20,16 +20,17 @@ Requires network access (or ``--src``).
 """
 
 import argparse
-import json
 import os
 import re
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import List
 
 from atsc3lib.ldpc_exact import (
     NINNER_NORMAL, RATE_MIN, RATE_MAX, GROUP_SIZE,
 )
+from atsc3lib.ldpc_tables import LDPC_TABLES_64800
+from atsc3lib.group_tables import GROUP_TABLES_64800
 from atsc3lib.nuc import QPSK, QAM16, QAM64, QAM256, QAM1024, QAM4096
 from tools.spec_sources import REF_COMMIT, REF_RAW, REF_REPO
 
@@ -43,9 +44,6 @@ NGROUP = NINNER_NORMAL // GROUP_SIZE
 #: Modulation name -> upstream C array suffix.
 _MOD_SUFFIX = {QPSK: 'QPSK', QAM16: '16QAM', QAM64: '64QAM',
                QAM256: '256QAM', QAM1024: '1024QAM', QAM4096: '4096QAM'}
-
-_DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                     'atsc3lib', 'data')
 
 
 @dataclass(frozen=True)
@@ -81,7 +79,6 @@ def _c_int_list(block: str) -> List[int]:
 
 
 def check_ldpc(text: str) -> CheckResult:
-    banked = json.load(open(os.path.join(_DATA, 'ldpc_tables_N64800.json')))
     mismatches = []
     for rate in RATES:
         m = re.search(
@@ -90,14 +87,13 @@ def check_ldpc(text: str) -> CheckResult:
         if not m:
             mismatches.append(f'rate {rate}: array not found')
             continue
-        if _c_int_rows(m.group(1)) != banked[str(rate)]['rows']:
+        _, _, _, _, rows = LDPC_TABLES_64800[rate]
+        if _c_int_rows(m.group(1)) != [list(r) for r in rows]:
             mismatches.append(f'rate {rate}: rows differ')
     return CheckResult('Annex A.1 LDPC', len(RATES), mismatches)
 
 
 def check_group(text: str) -> CheckResult:
-    banked = json.load(open(
-        os.path.join(_DATA, 'group_interleaver_64800.json')))['tables']
     mismatches = []
     compared = 0
     for mod, suffix in _MOD_SUFFIX.items():
@@ -109,7 +105,7 @@ def check_group(text: str) -> CheckResult:
             if not m:
                 mismatches.append(f'{mod} rate {rate}: array not found')
                 continue
-            if _c_int_list(m.group(1)) != banked[mod][str(rate)]:
+            if _c_int_list(m.group(1)) != list(GROUP_TABLES_64800[mod][rate]):
                 mismatches.append(f'{mod} rate {rate}: permutation differs')
     return CheckResult('Annex B.1 group interleaver', compared, mismatches)
 

@@ -5,19 +5,20 @@ Implements the exact LDPC codes defined in ATSC A/322:
   addresses
 - Type B (rates 6/15-13/15, less 7/15): QC-LDPC with base graph + Qldpc lifting
 
-Tables are extracted from the A/322:2024-04 Annex A tables and banked under
-``data/``: Table A.1.1-A.1.12 for Ninner=64800 (normal frames) and
-Table A.2.1-A.2.12 for Ninner=16200 (short frames).  The coding parameters
-come from Table 6.5 (Type A: M1/M2/Q1/Q2) and Table 6.7 (Type B: Qldpc).
+Tables are the A/322:2024-04 Annex A tables, inlined in
+:mod:`atsc3lib.ldpc_tables`: Table A.1.1-A.1.12 for Ninner=64800 (normal
+frames) and Table A.2.1-A.2.12 for Ninner=16200 (short frames).  The coding
+parameters come from Table 6.5 (Type A: M1/M2/Q1/Q2) and Table 6.7 (Type B:
+Qldpc).
 
 Reference: ATSC A/322:2024-04 Physical Layer Protocol, Section 6.1.3, Annex A
 """
 
 import numpy as np
-import json
-import os
 from dataclasses import dataclass
 from typing import Tuple, Dict, Optional, List
+
+from .ldpc_tables import LDPC_TABLES_16200, LDPC_TABLES_64800
 
 #: Frame lengths (A/322 6.1.3): short and normal LDPC codewords.
 NINNER_SHORT = 16200
@@ -79,11 +80,8 @@ TYPE_B_QLDPC: Dict[int, Dict[int, int]] = {
     NINNER_SHORT: TYPE_B_QLDPC_16200, NINNER_NORMAL: TYPE_B_QLDPC_64800,
 }
 
-#: Annex A table file per frame length (A/322 A.1 normal, A.2 short).
-_TABLE_FILES = {NINNER_SHORT: 'ldpc_tables_N16200.json',
-                NINNER_NORMAL: 'ldpc_tables_N64800.json'}
-
-_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+#: Annex A table per frame length (A/322 A.1 normal, A.2 short).
+_TABLES = {NINNER_SHORT: LDPC_TABLES_16200, NINNER_NORMAL: LDPC_TABLES_64800}
 
 _TABLE_CACHE: Dict[int, Dict] = {}
 
@@ -92,24 +90,32 @@ def load_tables(n: int = NINNER_SHORT) -> Dict:
     """Load official A/322 Annex A tables for a frame length, keyed by rate."""
     if n in _TABLE_CACHE:
         return _TABLE_CACHE[n]
-    with open(os.path.join(_DATA_DIR, _TABLE_FILES[n])) as f:
-        raw = json.load(f)
-    tables = {int(v['rate']): v for v in raw.values()}
+    raw = _TABLES[n]
+    tables = {}
+    for rate, entry in raw.items():
+        if n == NINNER_NORMAL:
+            rate, ninner, kldpc, code_type, rows = entry
+            tables[rate] = dict(rate=rate, Ninner=ninner, Kldpc=kldpc,
+                                code_type=code_type,
+                                rows=[list(r) for r in rows])
+        else:
+            rate, rows = entry
+            tables[rate] = dict(rate=rate, rows=[list(r) for r in rows])
     _TABLE_CACHE[n] = tables
     return tables
 
 
 def type_a_params(n: int) -> Dict[int, TypeAParams]:
     """Type A coding parameters (A/322 Table 6.5/6.6) for a frame length."""
-    if n not in _TABLE_FILES:
-        raise ValueError(f"Unsupported Ninner={n} (use {sorted(_TABLE_FILES)})")
+    if n not in _TABLES:
+        raise ValueError(f"Unsupported Ninner={n} (use {sorted(_TABLES)})")
     return TYPE_A_PARAMS[n]
 
 
 def type_b_qldpc(n: int) -> Dict[int, int]:
     """Type B Qldpc (A/322 Table 6.7) for a frame length."""
-    if n not in _TABLE_FILES:
-        raise ValueError(f"Unsupported Ninner={n} (use {sorted(_TABLE_FILES)})")
+    if n not in _TABLES:
+        raise ValueError(f"Unsupported Ninner={n} (use {sorted(_TABLES)})")
     return TYPE_B_QLDPC[n]
 
 
@@ -147,8 +153,8 @@ class ATSC3LDPCExact:
         if not RATE_MIN <= rate <= RATE_MAX:
             raise ValueError(f"Rate {rate}/15 not supported "
                              f"(use {RATE_MIN}-{RATE_MAX})")
-        if n not in _TABLE_FILES:
-            raise ValueError(f"Only Ninner in {sorted(_TABLE_FILES)} supported "
+        if n not in _TABLES:
+            raise ValueError(f"Only Ninner in {sorted(_TABLES)} supported "
                              f"(got {n})")
 
         self.rate = rate

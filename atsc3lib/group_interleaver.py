@@ -5,25 +5,22 @@ The A/322 Section 6.2 bit interleaver consists of:
 1. Parity interleaver (Type B LDPC rates only) - rearranges the LDPC parity
    section so the decoder sees it in natural order.
 2. Group interleaver - permutes 360-bit groups using the A/322 Annex B tables
-   (``data/group_interleaver_B2.json`` for Ninner=16200 and
-   ``data/group_interleaver_64800.json`` for Ninner=64800).
+   (inlined in :mod:`atsc3lib.group_tables`: short frames use the Annex B.2
+   numeric-modulation keys, normal frames the named-modulation keys).
 3. Block interleaver - Type A (``Nr1``/``Nr2`` columns per Table 6.10) or
    Type B (``NQCB_IG``/``Npart1``/``Npart2`` per Table 6.11).
 
-The table values match the A/322 Annex tables exactly.  The 64800 tables are
-extracted by ``tools/extract_bicm.py``; the 16200 tables by
-``tools/extract_bicm_short.py`` (or the equivalent).
+The table values match the A/322 Annex tables exactly.
 
 Reference: ATSC A/322:2024-04 Physical Layer Protocol, Section 6.2
 """
 
-import json
-import os
 from dataclasses import dataclass
 from typing import Dict, List
 
 import numpy as np
 
+from .group_tables import GROUP_TABLES_16200, GROUP_TABLES_64800
 from .ldpc_exact import (
     NINNER_SHORT, NINNER_NORMAL, RATE_DENOM, RATE_MIN, RATE_MAX, GROUP_SIZE,
     FEC_TYPE_A, FEC_TYPE_B, type_a_params, type_b_qldpc,
@@ -31,8 +28,6 @@ from .ldpc_exact import (
 from .nuc import (
     MODULATION_BITS, QPSK, QAM16, QAM64, QAM256, QAM1024, QAM4096,
 )
-
-_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
 #: Block-interleaver type A/B (A/322 Table 6.8/6.9 code value).
 BLOCK_TYPE_A, BLOCK_TYPE_B = 'A', 'B'
@@ -111,15 +106,8 @@ _BI_TYPE_B_16200 = {
     (QAM256, 6), (QAM256, 11),
 }
 
-#: Group-table file name per frame length (A/322 Annex B.1/B.2).
-_GROUP_FILES = {
-    NINNER_SHORT: 'group_interleaver_B2.json',
-    NINNER_NORMAL: 'group_interleaver_64800.json',
-}
-
-
-#: Modulation name -> JSON key in the short-frame group table file, which
-#: numbers modulations 1..4 (A/322 Annex B.2 order).
+#: Modulation name -> short-frame group-table key, which numbers modulations
+#: 1..6 (A/322 Annex B.2 order).
 _MODULATION_TABLE_KEY = {
     QPSK: 1, QAM16: 2, QAM64: 3, QAM256: 4,
     QAM1024: 5, QAM4096: 6,
@@ -129,26 +117,23 @@ _MODULATION_TABLE_KEY = {
 SUPPORTED_MODULATIONS = (QPSK, QAM16, QAM64, QAM256)
 
 
-def _load_group_tables(path: str) -> Dict:
-    """Load a group-wise table file, keyed by modulation name and rate.
+def _normalise_group_tables(raw: Dict, short: bool) -> Dict:
+    """Normalise an inlined group table to {modulation name: {rate: tuple}}.
 
-    The short-frame file keys modulations by number (A/322 Annex B.2 order,
-    1..4); the normal-frame file keys them by name.  Normalise to the name.
+    The short-frame table keys modulations by number (A/322 Annex B.2 order,
+    1..6); the normal-frame table keys them by name.  Rates are ints.
     """
-    with open(os.path.join(_DATA_DIR, path)) as f:
-        raw = json.load(f)
-    if 'tables' in raw:
-        raw = raw['tables']
     by_number = {v: k for k, v in _MODULATION_TABLE_KEY.items()}
     out = {}
     for mod, table in raw.items():
-        name = by_number[int(mod)] if mod.isdigit() else mod
-        out[name] = {int(rate): perm for rate, perm in table.items()}
+        name = by_number[int(mod)] if short else mod
+        out[name] = {int(rate): list(perm) for rate, perm in table.items()}
     return out
 
 
 _GROUP_TABLES = {
-    n: _load_group_tables(path) for n, path in _GROUP_FILES.items()
+    NINNER_SHORT: _normalise_group_tables(GROUP_TABLES_16200, short=True),
+    NINNER_NORMAL: _normalise_group_tables(GROUP_TABLES_64800, short=False),
 }
 
 
@@ -181,8 +166,8 @@ class GroupInterleaver:
 
     def __init__(self, rate: int, modulation: str = QPSK,
                  n: int = NINNER_SHORT):
-        if n not in _GROUP_FILES:
-            raise ValueError(f"Only N in {tuple(_GROUP_FILES)} supported, "
+        if n not in _GROUP_TABLES:
+            raise ValueError(f"Only N in {tuple(_GROUP_TABLES)} supported, "
                              f"got {n}")
         if not RATE_MIN <= rate <= RATE_MAX:
             raise ValueError(f"Rate {rate}/15 not supported "

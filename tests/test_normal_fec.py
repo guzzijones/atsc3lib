@@ -1,17 +1,16 @@
 """Normal-frame FEC (Ninner = 64800) gate: A/322 Annex A.1/B.1.
 
-The tables are machine-extracted from the A/322 PDF by
-``tools/extract_ldpc64k.py`` and ``tools/extract_bicm.py``.  These tests gate
-the banked tables structurally (the extraction's own arithmetic checks) and
-gate the decoder end to end at every rate.
+The tables are inlined in ``atsc3lib.ldpc_tables`` and
+``atsc3lib.group_tables``.  These tests gate the tables structurally (the
+extraction's own arithmetic checks) and gate the decoder end to end at every
+rate.
 """
-
-import json
-import os
 
 import numpy as np
 import pytest
 
+from atsc3lib.ldpc_tables import LDPC_TABLES_64800
+from atsc3lib.group_tables import GROUP_TABLES_64800
 from atsc3lib.ldpc_exact import (
     ATSC3LDPCExact, NINNER_NORMAL, RATE_DENOM, TYPE_A_PARAMS_64800,
     TYPE_B_QLDPC_64800, get_code_params,
@@ -19,11 +18,6 @@ from atsc3lib.ldpc_exact import (
 from atsc3lib.group_interleaver import (
     GroupInterleaver, SUPPORTED_MODULATIONS,
 )
-
-_DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                     'atsc3lib', 'data')
-_LDPC = os.path.join(_DATA, 'ldpc_tables_N64800.json')
-_BICM = os.path.join(_DATA, 'group_interleaver_64800.json')
 
 RATES = list(range(2, 14))
 NGROUP = NINNER_NORMAL // 360
@@ -33,8 +27,10 @@ class TestAnnexA1Tables:
     @pytest.fixture(scope='class')
     @classmethod
     def tables(cls):
-        with open(_LDPC) as f:
-            return {int(k): v for k, v in json.load(f).items()}
+        return {rate: dict(rate=rate, Ninner=ninner, Kldpc=kldpc,
+                           code_type=code_type, rows=[list(r) for r in rows])
+                for rate, (rate, ninner, kldpc, code_type, rows)
+                in LDPC_TABLES_64800.items()}
 
     def test_all_rates_present(self, tables):
         assert sorted(tables) == RATES
@@ -59,21 +55,11 @@ class TestAnnexA1Tables:
 
 
 class TestAnnexB1Tables:
-    @pytest.fixture(scope='class')
-    @classmethod
-    def tables(cls):
-        with open(_BICM) as f:
-            return json.load(f)
-
-    def test_header(self, tables):
-        assert tables['Ninner'] == NINNER_NORMAL
-        assert tables['Ngroup'] == NGROUP
-
-    @pytest.mark.parametrize('mod', SUPPORTED_MODULATIONS)
-    def test_all_rates_are_permutations(self, tables, mod):
-        for rate in RATES:
-            perm = tables['tables'][mod][str(rate)]
-            assert sorted(perm) == list(range(NGROUP))
+    def test_all_rates_are_permutations(self):
+        for mod in SUPPORTED_MODULATIONS:
+            for rate in RATES:
+                perm = GROUP_TABLES_64800[mod][rate]
+                assert sorted(perm) == list(range(NGROUP))
 
 
 class TestCodeParamsNormal:

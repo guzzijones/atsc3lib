@@ -8,7 +8,7 @@ additional continual pilots (A/322 Table D.1.4/D.1.5) and the data-cell counts
 SP*_4 groups print three rows and the naive read loses the first additional
 CP).  The independent GNU Radio transmitter ``drmpeg/gr-atsc3`` carries the same
 tables as plain C, pinned to a known commit; this tool fetches that source and
-rewrites ``atsc3lib/data/pilot_tables.json``.
+rewrites ``atsc3lib/pilot_data.py``.
 
 SOURCES (never committed)
 -------------------------
@@ -28,12 +28,11 @@ every FFT size, cred_coeff and allowed pattern.  A one-row-short D.1.4 reading
 fails this for every _4 pattern, which is exactly the error it exists to catch.
 
 Usage:
-    python -m tools.fetch_pilot_tables                     # fetch + write data/
+    python -m tools.fetch_pilot_tables                     # fetch + write atsc3lib/
     python -m tools.fetch_pilot_tables --src DIR           # use pre-fetched .h/.cc
 """
 
 import argparse
-import json
 import os
 import re
 import urllib.request
@@ -52,8 +51,8 @@ SPB_VALUES = (0, 1, 2, 3, 4)
 PATTERNS = tuple(spec.SP_PATTERN_SIGNALING[k] for k in sorted(spec.SP_PATTERN_SIGNALING))
 
 _DATA = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                     'atsc3lib', 'data')
-DEFAULT_OUT = os.path.join(_DATA, 'pilot_tables.json')
+                     'atsc3lib')
+DEFAULT_OUT = os.path.join(_DATA, 'pilot_data.py')
 
 #: C array name -> (fft, shape).  Pattern-major then cred (then boost).
 _TABLES = {
@@ -357,8 +356,26 @@ def main(argv=None):
                           for f, pp in tables.additional_cp.items()},
         'common_cp': {str(f): v for f, v in tables.common_cp.items()},
     }
+    header = (
+        '"""A/322 pilot and data-cell tables (Annex D/F, Tables 7.1-7.6).\n'
+        '\n'
+        'Generated from the pinned independent transcription\n'
+        '``drmpeg/gr-atsc3`` and gated by the constant-data-carrier identity\n'
+        '(A/322 8.1.4.1).  Keyed by FFT size, cred_coeff and scattered-pilot\n'
+        'pattern; see :mod:`atsc3lib.pilot_tables` for the accessor names.\n'
+        '"""\n\n'
+    )
     with open(args.out, 'w') as f:
-        json.dump(payload, f)
+        f.write(header)
+        for name, value in (
+                ('NOC', payload['noc']),
+                ('COMMON_CP', payload['common_cp']),
+                ('ADDITIONAL_CP', payload['additional_cp']),
+                ('AVAIL_DATA', payload['avail_data']),
+                ('SBS_TOTAL', payload['sbs_total']),
+                ('SBS_ACTIVE', payload['sbs_active'])):
+            f.write(f'{name} = {value!r}\n\n')
+        f.write(f'SOURCE = {payload["source"]!r}\n')
     print(f'wrote {args.out}')
 
 

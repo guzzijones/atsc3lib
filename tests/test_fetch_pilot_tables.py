@@ -1,7 +1,7 @@
-"""Network-gated check that the fetch tool reproduces the banked pilot tables.
+"""Network-gated check that the fetch tool reproduces the inlined pilot tables.
 
 Fetches the pinned gr-atsc3 sources and asserts the parsed tables equal the
-banked ``pilot_tables.json`` element-for-element.  Skips cleanly when offline.
+inlined ``atsc3lib.pilot_data`` element-for-element.  Skips cleanly when offline.
 """
 
 import pytest

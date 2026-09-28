@@ -4,11 +4,11 @@ WHY
 ---
 The receiver's short-frame chain (Ninner = 16200) is validated; the normal
 frame (Ninner = 64800) is signalled by PLP-1 and by most other stations.  Its
-code matrices live in A/322 Annex A.1 and are not in the repository, so they
-are extracted here once, gated, and written to
-``atsc3lib/data/ldpc_tables_N64800.json``.  Section 6.1.3's coding parameters
-(Table 6.5 Type A sizes, Table 6.7 Type B Qldpc) come from the library's
-``TYPE_A_PARAMS_64800`` / ``TYPE_B_QLDPC_64800``.
+code matrices live in A/322 Annex A.1 and are extracted here once, gated, and
+written to ``atsc3lib/ldpc_tables.py`` (which also holds the inlined short-frame
+tables).  Section 6.1.3's coding parameters (Table 6.5 Type A sizes, Table 6.7
+Type B Qldpc) come from the library's ``TYPE_A_PARAMS_64800`` /
+``TYPE_B_QLDPC_64800``.
 
 EXTRACTION DISCIPLINE
 ---------------------
@@ -34,13 +34,12 @@ C1  the printed two-column tables list row weights in non-increasing order;
 Usage:
     python tools/extract_ldpc64k.py [pdf] [out]
 The pdf argument is optional: when omitted the official A/322 PDF is fetched
-to a local cache (see ``tools/spec_sources.py``) and the banked
-``atsc3lib/data/ldpc_tables_N64800.json`` is overwritten.
+to a local cache (see ``tools/spec_sources.py``) and the inlined
+``atsc3lib/ldpc_tables.py`` is overwritten.
 Requires PyMuPDF (`pip install pymupdf`).
 """
 
 import argparse
-import json
 import os
 import re
 from dataclasses import dataclass
@@ -62,10 +61,10 @@ _RATE_CAPTION = re.compile(
     rf"Table A\.1\.\d+\s+Rate\s*=\s*(\d+)\s*/\s*{RATE_DENOM}")
 _CAPTION_PREFIX = "Table A.1."
 
-#: Default output path: the banked normal-frame table in the package.
+#: Default output path: the inlined table module in the package.
 DEFAULT_OUT = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
-    'atsc3lib', 'data', 'ldpc_tables_N64800.json')
+    'atsc3lib', 'ldpc_tables.py')
 
 
 @dataclass(frozen=True)
@@ -203,6 +202,40 @@ def _control_row_interleave(doc, pages) -> int:
     return checked
 
 
+def _fmt_rows(rows):
+    lines = []
+    for r in rows:
+        lines.append(f'        ({", ".join(str(x) for x in r)}),')
+    return '\n'.join(lines)
+
+
+def _write_ldpc_module(path, short_tables, normal_tables):
+    header = (
+        '"""A/322 Annex A LDPC parity-check address tables (short and normal frames).\n'
+        '\n'
+        'Extracted from ATSC A/322:2024-04 Annex A (Tables A.1.1-A.1.12 normal,\n'
+        'A.2.1-A.2.12 short).  Keyed by code-rate numerator over 15; each entry is a\n'
+        'tuple ``(rate, rows)`` where ``rows`` is the parity-accumulator address\n'
+        'table as a tuple of tuples.  Normal-frame entries additionally carry\n'
+        '``ninner``, ``kldpc`` and ``code_type`` (``"A"`` or ``"B"``, A/322 6.1.3).\n'
+        '"""\n'
+        '\n'
+    )
+    out = [header, 'LDPC_TABLES_16200 = {\n']
+    for rate in sorted(short_tables):
+        r, rows = short_tables[rate]
+        out.append(f'    {rate}: ({r}, (\n{_fmt_rows(rows)}\n    )),\n')
+    out.append('}\n\nLDPC_TABLES_64800 = {\n')
+    for rate in sorted(normal_tables):
+        r, ninner, kldpc, ctype, rows = normal_tables[rate]
+        out.append(
+            f'    {rate}: ({r}, {ninner}, {kldpc}, {ctype!r}, (\n'
+            f'{_fmt_rows(rows)}\n    )),\n')
+    out.append('}\n')
+    with open(path, 'w') as f:
+        f.write(''.join(out))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("pdf", nargs="?", default=None,
@@ -218,16 +251,16 @@ def main(argv=None):
         read = parse_table(doc, pages[rate])
         gate_rate(read, rate)
         p = code_params(rate)
-        tables[rate] = dict(rate=rate, Ninner=NINNER_NORMAL, Kldpc=p.k,
-                            code_type=p.code_type, rows=read.rows)
+        tables[rate] = (rate, NINNER_NORMAL, p.k, p.code_type,
+                        tuple(tuple(r) for r in read.rows))
         print(f"rate {rate}/{RATE_DENOM}: {len(read.rows)} rows, "
               f"{sum(len(r) for r in read.rows)} addresses, gated")
     checked = _control_row_interleave(doc, pages)
     print(f"control C1: row-interleaved read failed gates on {checked} pages")
     doc.close()
 
-    with open(args.out, "w") as f:
-        json.dump({str(k): v for k, v in tables.items()}, f)
+    from atsc3lib.ldpc_tables import LDPC_TABLES_16200
+    _write_ldpc_module(args.out, LDPC_TABLES_16200, tables)
     print(f"wrote {args.out}")
 
 
