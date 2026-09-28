@@ -3,7 +3,7 @@
 **ATSC 3.0 physical-layer receiver library.**
 
 Hardware-agnostic: works with raw IQ from any SDR wide enough for the 6 MHz
-channel (HackRF, Airspy, SDRplay, USRP).
+channel (Airspy, SDRplay, USRP).
 
 Implements, from the A/322 specification:
 
@@ -33,7 +33,7 @@ pip install -e .
 
 ```bash
 atsc3-capture -f 599 -o out/capture.iq          # auto-detect SDR
-atsc3-capture -f 599 -t hackrf -g 28            # force HackRF
+atsc3-capture -f 599 -t airspy -g 21             # force Airspy
 ```
 
 ## Decode Signalling and PLP Configuration
@@ -82,12 +82,22 @@ them alone.
 
 ## Supported Hardware
 
-- **HackRF** (via `hackrf_transfer`)
 - **Airspy** (via `airspy_rx`)
-- **Any SoapySDR device**
+- **Any SoapySDR device** (e.g. SDRplay)
 
 The library is hardware-agnostic: it consumes raw IQ samples from any source
 wide enough for the 6 MHz ATSC 3.0 channel.
+
+### HackRF Pro is not supported
+
+The **HackRF Pro** cannot meet the sample-rate floor this library requires.
+ATSC 3.0 needs at least 6.144 Msps of raw IQ.  The Pro's radio path is only
+8-bit, and its improved "extended-precision" (16-bit sample, ~9-11 ENOB) mode
+earns that dynamic range by oversampling with a minimum decimation factor of
+16x.  With the 40 MHz ADC clock, 40 MHz / 16 = **2.5 Msps maximum**, which is
+below the 6.144 Msps floor.  The Pro therefore cannot capture a full ATSC 3.0
+channel in a usable mode, regardless of firmware.  Use an SDRplay (e.g. RSP1A)
+or another device that delivers 6.144+ Msps natively.
 
 ## Link-layer limitations
 
