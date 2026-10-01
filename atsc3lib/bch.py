@@ -16,6 +16,8 @@ Reference: ATSC A/322:2024-04 Physical Layer Protocol, Section 6.1.2.1
 
 from typing import List, Optional, Tuple
 
+import numpy as np
+
 # ATSC Ninner=16200 component polynomials (degree 14, roots alpha^1..alpha^24),
 # given as exponent lists from Table 6.3.
 _BCH_EXPS_16200 = [
@@ -80,6 +82,8 @@ class _GF:
         if x != 1:
             raise ValueError("Provided polynomial is not primitive")
         self.exp[self.order] = self.exp[0]
+        self.exp_np = np.array(self.exp, dtype=np.int64)
+        self.log_np = np.array(self.log, dtype=np.int64)
 
     def mul(self, a: int, b: int) -> int:
         if a == 0 or b == 0:
@@ -137,6 +141,12 @@ class BCHCode:
         t: Correctable errors (12 for ATSC 3.0).
     """
 
+    #: Cached syndrome matrices, keyed by ``(bits, codeword length, t)``.
+    #: ``E[j, i] = alpha^(j * (n-1-i))`` for syndrome index ``j`` (1..2t) and
+    #: MSB-first bit position ``i``, so a syndrome is the GF(2^m) XOR of the
+    #: matrix columns selected by the set bits of the received word.
+    _SYND_CACHE = {}
+
     def __init__(self, n: int = 16200, t: int = 12):
         if n == 16200:
             polys = _BCH_POLYS_16200
@@ -171,16 +181,29 @@ class BCHCode:
         rem = _poly_mod(msg_int << self.mouter, self.g)
         return msg + _ints_to_bits(rem, self.mouter)
 
-    def _syndromes(self, rx: List[int]) -> List[int]:
-        """Syndromes S[1..2t] = r(alpha^j) for the shortened codeword r(x)."""
+    def _syndromes(self, rx) -> List[int]:
+        """Syndromes S[1..2t] = r(alpha^j) for the shortened codeword r(x).
+
+        Field addition is integer XOR (GF(2^m) as a vector space over GF(2)),
+        so each syndrome is the XOR of the precomputed ``alpha^(j*(n-1-i))``
+        columns selected by the set bits of ``rx``.
+        """
         gf = self.gf
+        n = len(rx)
+        key = (self.bits, n, self.t)
+        e = self._SYND_CACHE.get(key)
+        if e is None:
+            j = np.arange(1, 2 * self.t + 1, dtype=np.int64)
+            pos = np.arange(n - 1, -1, -1, dtype=np.int64)
+            exps = (j[:, None] * pos[None, :]) % gf.order
+            e = gf.exp_np[exps]
+            self._SYND_CACHE[key] = e
+        rxb = np.asarray(rx, dtype=np.uint8) & 1
+        ones = np.flatnonzero(rxb)
         synd = [0] * (2 * self.t + 1)
-        for j in range(1, 2 * self.t + 1):
-            s = 0
-            aj = gf.exp[j]
-            for bit in rx:
-                s = gf.mul(s, aj) ^ bit
-            synd[j] = s
+        if ones.size == 0:
+            return synd
+        synd[1:] = np.bitwise_xor.reduce(e[:, ones], axis=1).tolist()
         return synd
 
     def _berlekamp_massey(self, synd: List[int]) -> Optional[List[int]]:
@@ -227,20 +250,27 @@ class BCHCode:
         return c
 
     def _chien_search(self, sigma: List[int], n: int) -> Optional[List[int]]:
-        """Find error positions p in [0, n) of an n-bit codeword (MSB first)."""
+        """Find error positions p in [0, n) of an n-bit codeword (MSB first).
+
+        Vectorized Horner evaluation of the reversed locator polynomial over
+        the candidate field elements ``alpha^(-location)``, ``location =
+        n-1-p``.
+        """
         gf = self.gf
-        positions = []
         sigma_rev = list(reversed(sigma))
-        for p in range(n):
-            location = n - 1 - p
-            x_inv = gf.exp[(-location) % gf.order]
-            value = 0
-            for coeff in sigma_rev:
-                value = gf.mul(value, x_inv) ^ coeff
-            if value == 0:
-                positions.append(p)
-                if len(positions) > self.t:
-                    return None
+        location = np.arange(n - 1, -1, -1, dtype=np.int64)
+        x_inv = gf.exp_np[(-location) % gf.order]
+        value = np.zeros(n, dtype=np.int64)
+        for coeff in sigma_rev:
+            c = int(coeff)
+            nz = value != 0
+            prod = np.zeros(n, dtype=np.int64)
+            prod[nz] = gf.exp_np[(gf.log_np[value[nz]] + gf.log_np[x_inv[nz]])
+                                 % gf.order]
+            value = prod ^ c
+        positions = np.flatnonzero(value == 0).tolist()
+        if len(positions) > self.t:
+            return None
         return positions
 
     def decode(self, received_bits) -> Tuple[List[int], int, bool]:

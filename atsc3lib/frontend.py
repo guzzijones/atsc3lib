@@ -7,7 +7,7 @@ Sample rates (A/322 Annex N.2.2):
 - The main OFDM signal uses 0.384 * (bsr_coefficient + 16) MHz; for the
   default bsr_coefficient = 2 this is 6.912 MHz.
 
-A capture taken at an arbitrary SDR rate (e.g. 10 MHz for HackRF) must be
+A capture taken at an arbitrary SDR rate (e.g. 10 MHz for the SDRplay) must be
 resampled to 6.144 MHz before bootstrap detection, then resampled again /
 decimated to 6.912 MHz for OFDM demodulation.
 """
@@ -39,12 +39,17 @@ def resample_iq(iq: np.ndarray, fs_in: float, fs_out: float) -> np.ndarray:
 
 
 def read_hackrf_iq(path: str, limit: Optional[int] = None) -> np.ndarray:
-    """Read a HackRF int8 interleaved IQ file into complex64."""
+    """Read an int8 interleaved IQ file (SDRplay/HackRF CS8) into complex64."""
     data = np.fromfile(path, dtype=np.int8)
     if limit is not None:
         data = data[:limit * 2]
     return (data[::2].astype(np.float32) +
             1j * data[1::2].astype(np.float32)) / 128.0
+
+
+def read_cs8_iq(path: str, limit: Optional[int] = None) -> np.ndarray:
+    """Read an interleaved int8 (CS8) IQ capture into complex64."""
+    return read_hackrf_iq(path, limit)
 
 
 @dataclass

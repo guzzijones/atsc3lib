@@ -309,6 +309,74 @@ def data_symbol_cells(symbol: np.ndarray, fft_size: int, noc: int,
                            pilot_coherence=coh, n_carriers=noc)
 
 
+def dense_symbol_channel(y: np.ndarray, t0: int, fft_size: int,
+                         guard_interval: int, noc: int, dx: int, dy: int,
+                         l: int, n_data_symbols: int, sbs_symbols: tuple,
+                         cp_rel: np.ndarray, add_cp=(), amplitude: float = 1.0
+                         ) -> np.ndarray:
+    """Dense frequency-domain channel estimate for one data symbol.
+
+    A/322 8.1.3.1 scatters the pilots at ``k mod (DX*DY) == DX*(l mod DY)``,
+    so a single symbol samples the channel only every ``DX*DY`` carriers and
+    the linear interpolator in :func:`data_symbol_cells` under-resolves a
+    frequency-selective (multipath) channel.  Because the channel is static
+    across a subframe, the ``DY`` scattered-pilot subsets of ``DY`` consecutive
+    symbols interleave into a ``DX``-spaced grid: each subset is phase-aligned
+    to symbol ``l`` via the continual pilots (A/322 8.1.4, present every
+    symbol), merged, and the denser grid interpolated across every carrier.  A
+    subframe boundary symbol carries the full ``DX`` grid itself (DY = 1,
+    A/322 8.1.3.1).  This is what lifts RF33 subframe-1 PLP-1 (256QAM) from a
+    multipath-limited 0/117 to 117/117; the single-symbol estimate leaves a
+    residual that nearest-point MER under-reports.
+    """
+    ref = reference_sequence(noc).astype(np.int64)
+    cpedge = np.unique(np.concatenate([
+        np.asarray(cp_rel, dtype=int), np.asarray(add_cp, dtype=int),
+        [0, noc - 1]]))
+    known_ce = (amplitude * (1.0 - 2.0 * ref[cpedge])).astype(np.complex128)
+    sbs_set = tuple(sbs_symbols)
+
+    def carriers_at(lj: int) -> np.ndarray:
+        start = t0 + (fft_size + guard_interval) * lj + guard_interval
+        return _relative_carriers(
+            y[start:start + fft_size].astype(np.complex128), fft_size, noc)
+
+    c0 = carriers_at(l)
+    h0 = c0[cpedge] / known_ce
+
+    dense_k = np.arange(0, noc, dx)
+    acc = np.zeros(len(dense_k), dtype=np.complex128)
+    weight = np.zeros(len(dense_k), dtype=float)
+    for j in range(dy):
+        lj = l + j
+        if lj >= n_data_symbols:
+            break
+        c = carriers_at(lj)
+        h_ce = c[cpedge] / known_ce
+        phi = float(np.angle(np.sum(h_ce * np.conj(h0))))
+        sp = (np.arange(0, noc, dx) if lj in sbs_set
+              else np.arange(dx * (lj % dy), noc, dx * dy))
+        known = (amplitude * (1.0 - 2.0 * ref[sp])).astype(np.complex128)
+        h = (c[sp] / known) * np.exp(-1j * phi)
+        acc[sp // dx] += h
+        weight[sp // dx] += 1.0
+
+    have = weight > 0
+    dense = np.zeros(len(dense_k), dtype=np.complex128)
+    dense[have] = acc[have] / weight[have]
+    # Continual/edge pilots of symbol ``l`` fill any grid gaps they coincide
+    # with (they are already phase-0 relative to ``l``).
+    for pk, hv in zip(cpedge.tolist(), h0.tolist()):
+        g = int(round(pk / dx))
+        if 0 <= g < len(dense_k) and not have[g]:
+            dense[g] = hv
+            have[g] = True
+
+    all_k = np.arange(noc)
+    return (np.interp(all_k, dense_k, dense.real)
+            + 1j * np.interp(all_k, dense_k, dense.imag))
+
+
 def qpsk_demap_llr(cells: np.ndarray) -> np.ndarray:
     """Max-log LLRs for QPSK, in q-stream order (q_{2*s+i}).
 
@@ -529,15 +597,16 @@ class CellPool:
 
 
 def build_data_symbol_pool(y: np.ndarray, t0: int, fft_size: int,
-                           guard_interval: int, noc: int, dx: int, dy: int,
-                           n_data_symbols: int, sbs_symbols=(0,),
-                           pattern: str = 'SP4_2', sbs_null: int = None,
-                           cred_coeff: int = 0,
-                           fi_offset: int = 0,
-                           fi_enabled: bool = True,
-                           fine_timing_enabled: bool = False,
-                           fine: "FineTiming" = None,
-                           cpe: "CpeSpec" = None) -> CellPool:
+                            guard_interval: int, noc: int, dx: int, dy: int,
+                            n_data_symbols: int, sbs_symbols=(0,),
+                            pattern: str = 'SP4_2', sbs_null: int = None,
+                            cred_coeff: int = 0,
+                            fi_offset: int = 0,
+                            fi_enabled: bool = True,
+                            fine_timing_enabled: bool = False,
+                            fine: "FineTiming" = None,
+                            cpe: "CpeSpec" = None,
+                            dense: bool = False) -> CellPool:
     """Cells of a subframe's data symbols, frequency-de-interleaved in order.
 
     This is the generic (no-Preamble) half of :func:`build_cell_pool`; a
@@ -568,6 +637,9 @@ def build_data_symbol_pool(y: np.ndarray, t0: int, fft_size: int,
         fine: A precomputed :class:`FineTiming`; overrides ``fine_timing``.
         cpe: A :class:`CpeSpec`; when given, the decision-directed per-symbol
             common-phase correction runs on the pool (:func:`cpe_correct`).
+        dense: Use :func:`dense_symbol_channel` (multi-symbol scattered-pilot
+            merge) for the channel estimate instead of the single-symbol
+            interpolator; resolves frequency-selective (multipath) channels.
 
     Returns:
         CellPool for the subframe (``n_preamble_spare`` is 0).
@@ -582,15 +654,27 @@ def build_data_symbol_pool(y: np.ndarray, t0: int, fft_size: int,
     if fine is not None:
         t0 = t0 + fine.offset
 
+    cp_rel = common_cp_relative(noc, fft_size)
     parts, owner = [], []
     for l in range(n_data_symbols):
         sbs = l in tuple(sbs_symbols)
         start = t0 + (fft_size + guard_interval) * l + guard_interval
-        result = data_symbol_cells(
-            y[start:start + fft_size], fft_size, noc, dx, dy, l, sbs,
-            add_cp=add_cp)
-        x = (fi_deinterleave(result.cells, fi_offset + l, fft_size)
-             if fi_enabled else result.cells)
+        if dense:
+            channel = dense_symbol_channel(
+                y, t0, fft_size, guard_interval, noc, dx, dy, l,
+                n_data_symbols, tuple(sbs_symbols), cp_rel, add_cp=add_cp)
+            carriers = _relative_carriers(
+                y[start:start + fft_size].astype(np.complex128), fft_size, noc)
+            pilots = _pilots(noc, dx, dy, l, sbs, cp_rel, add_cp)
+            data_mask = np.ones(noc, dtype=bool)
+            data_mask[pilots] = False
+            cells = (carriers / channel)[data_mask]
+        else:
+            cells = data_symbol_cells(
+                y[start:start + fft_size], fft_size, noc, dx, dy, l, sbs,
+                add_cp=add_cp).cells
+        x = (fi_deinterleave(cells, fi_offset + l, fft_size)
+             if fi_enabled else cells)
         if sbs:
             x = x[lo_n:len(x) - hi_n]
         parts.append(x)
@@ -904,18 +988,23 @@ def decode_subframe_plp(y: np.ndarray, t0: int, fft_size: int,
                         fi_enabled: bool = True,
                         fine_timing_enabled: bool = False,
                         cpe: bool = False,
-                        dummy_start: int = None) -> PlpPayload:
+                        dummy_start: int = None,
+                        dense: bool = True) -> PlpPayload:
     """Decode one PLP of a subframe after the first (no Preamble, FI reset).
 
     ``t0`` is this subframe's first symbol (guard-interval start); the frequency
     interleaver counter resets here, so ``fi_offset`` is 0 (A/322 7.3 rule 2).
+    ``dense`` uses the multi-symbol scattered-pilot channel estimate, which is
+    required to resolve the frequency-selective (multipath) channel RF33's
+    subframe-1 256QAM PLP experiences.
     """
     pool = build_data_symbol_pool(
         y, t0, fft_size, guard_interval, noc, dx, dy, n_data_symbols,
         sbs_symbols=sbs_symbols, pattern=pattern, sbs_null=sbs_null,
         cred_coeff=cred_coeff, fi_offset=fi_offset, fi_enabled=fi_enabled,
         fine_timing_enabled=fine_timing_enabled,
-        cpe=cpe_spec(plp, dummy_start) if cpe else None)
+        cpe=cpe_spec(plp, dummy_start) if cpe else None,
+        dense=dense)
     return decode_plp_from_pool(pool, plp, max_iterations=max_iterations)
 
 

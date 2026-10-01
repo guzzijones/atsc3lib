@@ -32,6 +32,12 @@ from . import l1_signaling
 from .preamble import preamble_l1_cells, preamble_symbol_cells
 
 
+#: Byte-variance ratio above which an interleaved IQ file is judged int16
+#: (CS16) rather than int8 (CS8).  A CS16 high byte carries the signal (its
+#: variance is ~1.5x the low byte), while a CS8 file has equal byte variance.
+_CS16_BYTE_VARIANCE_RATIO = 1.25
+
+
 @dataclass
 class ReceiverResult:
     """Outcome of decoding the signalling of one frame."""
@@ -181,26 +187,47 @@ def _preamble_l1_detail_cells(first_cells, main, boot_span, structure, params,
     return np.concatenate(parts)[:n_detail_cells]
 
 
+def _guess_sample_format(path: str) -> str:
+    """Distinguish an int8 (CS8) from an int16 (CS16) interleaved IQ file.
+
+    In a CS16 file the bytes come in little-endian I/Q pairs, so the high byte
+    of each sample (odd byte positions) carries the signal while the low byte
+    (even byte positions) is near-uniform over its full range.  In a CS8 file
+    every byte is an I or Q sample with equal variance.  The odd/even
+    byte-variance ratio therefore separates them (CS16 ~1.5, CS8 ~1.0).
+    """
+    raw = np.fromfile(path, dtype=np.uint8, count=4_000_000)
+    if raw.size < 4:
+        return 'cs8'
+    low = raw[0::2].astype(np.float64).std()
+    high = raw[1::2].astype(np.float64).std()
+    return 'cs16' if high > _CS16_BYTE_VARIANCE_RATIO * low else 'cs8'
+
+
+def _read_iq(path: str, fmt: str) -> np.ndarray:
+    """Read an interleaved IQ file in the given sample format to complex64."""
+    if fmt in ('cs8', 'int8', 'hackrf'):
+        return read_hackrf_iq(path)
+    if fmt in ('cf32', 'float32'):
+        raw = np.fromfile(path, dtype=np.float32)
+        return (raw[::2] + 1j * raw[1::2]).astype(np.complex64)
+    if fmt in ('cs16', 'int16'):
+        raw = np.fromfile(path, dtype=np.int16)
+        return ((raw[::2] + 1j * raw[1::2]) / 32768.0).astype(np.complex64)
+    raise ValueError(f"Unknown capture format {fmt!r}")
+
+
 def decode_capture(path: str, fs_main: float, fmt: str = 'auto',
                    max_iterations: int = 100) -> ReceiverResult:
     """Decode the signalling from a saved IQ capture file.
 
-    ``fmt`` selects the sample format: 'cs8' (HackRF int8, the default for
-    unknown files), 'cs16' (int16) or 'cf32' (float32).  'auto' guesses by
-    file extension and falls back to int8.
+    ``fmt`` selects the sample format: 'cs8' (int8 interleaved IQ), 'cs16'
+    (int16) or 'cf32' (float32).  'auto' detects int8 vs int16 by byte
+    variance and defaults to int8.
     """
     if fmt == 'auto':
-        fmt = 'cs8'
-    if fmt in ('cs8', 'int8', 'hackrf'):
-        iq = read_hackrf_iq(path)
-    elif fmt in ('cf32', 'float32'):
-        raw = np.fromfile(path, dtype=np.float32)
-        iq = (raw[::2] + 1j * raw[1::2]).astype(np.complex64)
-    elif fmt in ('cs16', 'int16'):
-        raw = np.fromfile(path, dtype=np.int16)
-        iq = ((raw[::2] + 1j * raw[1::2]) / 32768.0).astype(np.complex64)
-    else:
-        raise ValueError(f"Unknown capture format {fmt!r}")
+        fmt = _guess_sample_format(path)
+    iq = _read_iq(path, fmt)
     return decode_signaling(iq, fs_main, max_iterations=max_iterations)
 
 

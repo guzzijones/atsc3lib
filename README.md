@@ -34,6 +34,7 @@ pip install -e .
 ```bash
 atsc3-capture -f 599 -o out/capture.iq          # auto-detect SDR
 atsc3-capture -f 599 -t airspy -g 21             # force Airspy
+atsc3-capture -f 587 -t sdrplay -g 40 --rf-gain 4  # force SDRplay (RSP1B)
 ```
 
 ## Decode Signalling and PLP Configuration
@@ -82,11 +83,28 @@ them alone.
 
 ## Supported Hardware
 
+- **SDRplay** (RSP1B, via the bundled `soapy_capture` SoapySDR helper)
 - **Airspy** (via `airspy_rx`)
-- **Any SoapySDR device** (e.g. SDRplay)
+- **Any SoapySDR device** (via the same helper, `--driver` passthrough)
 
 The library is hardware-agnostic: it consumes raw IQ samples from any source
 wide enough for the 6 MHz ATSC 3.0 channel.
+
+### SDRplay driver
+
+The capture path shells out to `tools/soapy_capture`, a small C program that
+streams the RSP1B's native CS16 and writes interleaved int16 IQ by default
+(`--cs8` down-converts to the int8 layout).  `atsc3-decode` auto-detects the
+sample format.  Build it once with:
+
+```bash
+make
+```
+
+If the binary is missing, `atsc3-capture` builds it on demand into
+`~/.cache/atsc3lib` (needs `cc` + SoapySDR headers).  The RSP1B's two gain
+elements are exposed as `--gain` (IFGR) and `--rf-gain` (RFGR); on RF33 the
+lighthouse decodes with `--gain 45 --rf-gain 3`.
 
 ### HackRF Pro is not supported
 
@@ -121,19 +139,32 @@ MODCODs.  TI mode 2 supports the A/322 7.1.5.4 twisted block interleaver and
 the optional A/322 7.1.5.2 **cell** interleaver
 (`L1D_plp_HTI_cell_interleaver`); TI modes 0/1 are supported.
 
-**A lighthouse multiplex decodes off air.**  PLP-0 (64QAM-NUC 11/15) converges 53-60 of 74 FEC blocks from a clean capture and yields real LLS: the
-A/331 **SLT** and SystemTime.  The SLT lists the major services carried by the
-multiplex.  This is the first off-air service list, and it replaces the earlier
-"padding-only, link-limited" conclusion.
+**A lighthouse multiplex decodes off air.**  With the SDRplay RSP1B, PLP-0
+(64QAM-NUC 11/15) converges **74/74** FEC blocks (was 53-60/74 on the HackRF)
+and yields real LLS: the A/331 **SLT** and SystemTime.  The SLT lists the major
+services carried by the multiplex.  This is the first off-air service list, and
+it replaces the earlier "padding-only, link-limited" conclusion.
 
 The scale bug that hid this: the A/322 Annex C NUC alphabets have unit average
 power, but an equalised cell block does not, and the max-log metric is not
 invariant to that scale.  Every data FEC block is therefore normalised to unit
 mean power before demapping (`DataPlpChain.decode_cells`); without it PLP-0
-decodes 0/74, with it 53-60/74.
+decodes 0/74, with it 74/74 on the SDRplay (53-60/74 on the HackRF).
 The decision-directed CPE happened to normalise internally, which masked the
 defect whenever CPE was on.  The property is gated by
 `tests/test_data_plp.py::test_decode_cells_scale_invariant`.
+
+**Subframe-1 PLP-1 (256QAM-NUC 11/15) now decodes 117/117 off air**, yielding
+358 UDP datagrams.  The two changes that closed it: the SDRplay RSP1B front end
+reads subframe 1 at 25.8 dB nearest-point MER (the HackRF fixture was 20.6 dB),
+and the channel estimator now merges the ``DY`` scattered-pilot subsets of
+``DY`` consecutive symbols into a ``DX``-spaced grid (`dense_symbol_channel`),
+resolving the frequency-selective (multipath) residual the single-symbol linear
+interpolator left behind.  The measured channel ripple was |H| std 0.19
+(norm 0.85-2.64); a synthetic static channel with that ripple read 23.0 dB MER
+and decoded 0/39 under the old estimator, while pure AWGN at 22.9 dB decoded
+39/39 — nearest-point MER under-reports multipath residual for 256QAM.
+`decode_subframe_plp` defaults ``dense=True``.
 
 Payload demodulation works on any subframe.  Subframe 0 carries the Preamble
 spare cells; later subframes are demodulated at their own FFT/GI/pilot geometry

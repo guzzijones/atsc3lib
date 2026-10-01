@@ -431,7 +431,9 @@ class ATSC3LDPCExact:
 
         # Work in the conventional L'>0 => bit 0 domain by negating the
         # channel LLRs, then map back to the library's LLR>0 => bit 1 output.
-        channel = -np.asarray(llrs, dtype=np.float64)
+        # float32 halves the memory bandwidth of the packed edge arrays and is
+        # sufficient for normalized min-sum.
+        channel = -np.asarray(llrs, dtype=np.float32)
         total = channel.copy()
 
         hard = (total < 0).astype(np.uint8)
@@ -443,9 +445,9 @@ class ATSC3LDPCExact:
 
         # Check -> variable messages, one value per edge (check-major order,
         # so M reshapes directly onto the rectangular check_idx slots).
-        M = np.zeros((n_checks, dmax), dtype=np.float64)
+        M = np.zeros((n_checks, dmax), dtype=np.float32)
         # Dummy column to keep padding slots finite in the gather.
-        total_pad = np.empty(self.n + 1, dtype=np.float64)
+        total_pad = np.empty(self.n + 1, dtype=np.float32)
         total_pad[:self.n] = total
         total_pad[self.n] = 1e9
         idx_pad = self.check_idx.copy()
@@ -457,11 +459,13 @@ class ATSC3LDPCExact:
             W = total_pad[idx_pad] - M
             mags = np.abs(W)
             mags[~self.check_mask] = np.inf      # padding never wins the min
-            order = np.argpartition(mags, 1, axis=1)
-            first = order[:, 0]
-            second = order[:, 1]
+            # Smallest magnitude and its position, then the next-smallest by
+            # masking the winner (cheaper than a full-row argpartition since
+            # only two values are needed).
+            first = np.argmin(mags, axis=1)
             min1 = mags[row_index, first]
-            min2 = mags[row_index, second]
+            min2 = np.where(np.arange(dmax)[None, :] == first[:, None],
+                            np.inf, mags).min(axis=1)
             # A degree-1 check carries no extrinsic information: min2 = min1.
             min2 = np.where(check_degree == 1, min1, min2)
             # Outgoing magnitude: min2 on the edge attaining min1, else min1.
@@ -475,8 +479,11 @@ class ATSC3LDPCExact:
             M[~self.check_mask] = 0.0            # padding contributes nothing
 
             # Variable node update: posterior = channel + sum of edge messages.
-            total = channel.copy()
-            np.add.at(total, self.edge_var, M[self.check_mask])
+            # edge_var is check-major; bincount scatters each edge's message
+            # into its variable (faster than np.add.at).
+            total = channel + np.bincount(
+                self.edge_var, weights=M[self.check_mask],
+                minlength=self.n).astype(np.float32)
             total_pad[:self.n] = total
 
             hard = (total < 0).astype(np.uint8)

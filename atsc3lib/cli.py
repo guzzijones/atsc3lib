@@ -53,7 +53,7 @@ def decode_main(argv=None):
                         help='capture sample rate in Hz (e.g. 10e6)')
     parser.add_argument('--fmt', default='auto',
                         choices=['auto', 'cs8', 'cs16', 'cf32'],
-                        help="sample format (default: cs8, HackRF int8)")
+                        help="sample format (default: cs8, int8 interleaved IQ)")
     parser.add_argument('--max-iterations', type=int, default=100,
                         help='LDPC iteration cap')
     parser.add_argument('--plp', type=int, default=None,
@@ -90,9 +90,10 @@ def decode_main(argv=None):
         return 1
 
     if not args.no_payload:
-        from .frontend import read_hackrf_iq
+        from .receiver import _read_iq, _guess_sample_format
         from .payload import decode_streams
-        iq = read_hackrf_iq(args.file)
+        fmt = args.fmt if args.fmt != 'auto' else _guess_sample_format(args.file)
+        iq = _read_iq(args.file, fmt)
         sf = result.l1_detail.subframes[args.subframe]
         cti = any(p.ti_mode == TI_CTI for p in sf['plps'] if p.layer == 0)
         if cti:

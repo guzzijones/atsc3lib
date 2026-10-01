@@ -18,7 +18,11 @@ import numpy as np
 import pytest
 
 from atsc3lib import pilot_tables, spec
-from atsc3lib.payload import build_data_symbol_pool, data_symbol_cells
+from atsc3lib.payload import (
+    build_data_symbol_pool, data_symbol_cells, dense_symbol_channel,
+    common_cp_relative, _relative_carriers,
+)
+from atsc3lib.pilot_reference import reference_sequence
 
 _DATA = os.path.join(os.path.dirname(__file__), 'data')
 _SF1 = os.path.join(_DATA, 'rf33_sf1_y.npy')
@@ -76,6 +80,67 @@ class TestSf1Geometry:
         per_sbs = pilot_tables.sbs_total(16384, 0, 'SP4_4') - null
         assert per_sbs == 8663
         assert 2 * per_sbs + (nsym - 2) * avail == SF1_POOL_CELLS
+
+
+class TestDenseChannel:
+    """The multi-symbol channel estimator resolves a frequency-selective
+    (multipath) channel that the single-symbol interpolator under-resolves."""
+
+    def _symbols(self, fft=16384, gi=1536, noc=13825, dx=4, dy=4, n_sym=8,
+                 seed=0):
+        ref = reference_sequence(noc).astype(np.int64)
+        cp = np.asarray(pilot_tables.common_cp_relative(fft, 0))
+        add = np.asarray(pilot_tables.additional_cp(fft, 'SP4_4', 0))
+        origin = (spec.NOC_MAX[fft] - noc) // 2
+        shift = fft // 2 + (origin - (spec.NOC_MAX[fft] - 1) // 2)
+        k = np.arange(noc)
+        H = (1.0 + 0.4 * np.exp(2j * np.pi * k / 200)
+             + 0.2 * np.exp(2j * np.pi * k / 47))
+        rng = np.random.default_rng(seed)
+        y = np.zeros((fft + gi) * n_sym + gi, dtype=np.complex128)
+        for l in range(n_sym):
+            sp = np.arange(dx * (l % dy), noc, dx * dy)
+            pilots = np.unique(np.concatenate([sp, cp, add, [0, noc - 1]]))
+            data = np.ones(noc, bool)
+            data[pilots] = False
+            vals = np.zeros(noc, dtype=np.complex128)
+            vals[pilots] = (1.0 - 2.0 * ref[pilots]).astype(np.complex128)
+            vals[data] = ((rng.integers(0, 2, data.sum()) * 2 - 1)
+                          + 1j * (rng.integers(0, 2, data.sum()) * 2 - 1)
+                          ) / np.sqrt(2)
+            S = np.zeros(fft, dtype=np.complex128)
+            S[shift:shift + noc] = vals * H
+            body = np.fft.ifft(np.fft.ifftshift(S))
+            y[(fft + gi) * l + gi:(fft + gi) * l + gi + fft] = body
+        return y, H, (fft, gi, noc, dx, dy, cp, add)
+
+    def test_recovers_frequency_selective_channel(self):
+        y, H, (fft, gi, noc, dx, dy, cp, add) = self._symbols()
+        h = dense_symbol_channel(y, 0, fft, gi, noc, dx, dy, 4, 8, (),
+                                 cp, add_cp=add)
+        corr = np.abs(np.vdot(h, H)) / np.sqrt(
+            np.vdot(h, h).real * np.vdot(H, H).real)
+        assert corr > 0.999
+
+    def test_beats_single_symbol_interpolator(self):
+        y, H, (fft, gi, noc, dx, dy, cp, add) = self._symbols()
+        ref = reference_sequence(noc).astype(np.int64)
+        l = 4
+        sp = np.arange(dx * (l % dy), noc, dx * dy)
+        pilots = np.unique(np.concatenate([sp, cp, add, [0, noc - 1]]))
+        car = _relative_carriers(
+            y[(fft + gi) * l + gi:(fft + gi) * l + gi + fft], fft, noc)
+        hp = car[pilots] / (1.0 - 2.0 * ref[pilots])
+        h1 = np.interp(np.arange(noc), pilots, hp.real) + 1j * np.interp(
+            np.arange(noc), pilots, hp.imag)
+        corr1 = np.abs(np.vdot(h1, H)) / np.sqrt(
+            np.vdot(h1, h1).real * np.vdot(H, H).real)
+
+        hd = dense_symbol_channel(y, 0, fft, gi, noc, dx, dy, l, 8, (),
+                                  cp, add_cp=add)
+        corrd = np.abs(np.vdot(hd, H)) / np.sqrt(
+            np.vdot(hd, hd).real * np.vdot(H, H).real)
+        assert corrd > corr1
 
 
 @pytest.mark.skipif(not (os.path.exists(_SF1) and os.path.exists(_META)),

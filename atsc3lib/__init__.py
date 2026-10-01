@@ -1,8 +1,8 @@
 """ATSC 3.0 physical-layer receiver library.
 
 Hardware-agnostic: works with raw IQ from any SDR wide enough for the 6 MHz
-channel (HackRF, Airspy, SDRplay, USRP).  RTL-SDR (2.4 MHz) is too narrow and
-is not supported.
+channel (SDRplay, Airspy, USRP).  RTL-SDR (2.4 MHz) is too narrow and is not
+supported.
 
 The canonical entry point is :func:`decode_capture`, which runs the full
 validated signalling chain (bootstrap -> Preamble -> L1-Basic -> L1-Detail ->
@@ -18,7 +18,7 @@ from . import crc
 # Capture and front-end
 from .capture import capture
 from .frontend import (
-    resample_iq, acquire_frame, read_hackrf_iq, FrameInfo,
+    resample_iq, acquire_frame, read_hackrf_iq, read_cs8_iq, FrameInfo,
     BOOTSTRAP_RATE_HZ, MAIN_RATE_HZ,
 )
 from .ofdm_detect import (
@@ -91,6 +91,7 @@ __all__ = [
     "resample_iq",
     "acquire_frame",
     "read_hackrf_iq",
+    "read_cs8_iq",
     "FrameInfo",
     "BOOTSTRAP_RATE_HZ",
     "MAIN_RATE_HZ",
