@@ -3,7 +3,7 @@
 **ATSC 3.0 physical-layer receiver library.**
 
 Hardware-agnostic: works with raw IQ from any SDR wide enough for the 6 MHz
-channel (Airspy, SDRplay, USRP).
+channel (SDRplay, USRP).
 
 Implements, from the A/322 specification:
 
@@ -22,19 +22,29 @@ Implements, from the A/322 specification:
 
 Validated against real off-air captures and an independent receiver.
 
-## Installation
+## Installation and build
+
+The SDRplay capture extension `sdrbindings` is a separate package and a
+declared dependency; install it first (see `../sdrbindings`), then atsc3lib:
 
 ```bash
 cd atsc3lib
-pip install -e .
+make install      # pip install -e .
+```
+
+`make` targets:
+
+```bash
+make              # install atsc3lib (editable) and dependencies
+make test         # run the atsc3lib test suite
+make clean        # remove build artefacts
 ```
 
 ## Capture IQ Samples
 
 ```bash
-atsc3-capture -f 599 -o out/capture.iq          # auto-detect SDR
-atsc3-capture -f 599 -t airspy -g 21             # force Airspy
-atsc3-capture -f 587 -t sdrplay -g 40 --rf-gain 4  # force SDRplay (RSP1B)
+atsc3-capture -f 587 -o out/capture.iq              # SDRplay RSP1B
+atsc3-capture -f 587 -g 45 --rf-gain 3              # tuned on RF33
 ```
 
 ## Decode Signalling and PLP Configuration
@@ -83,28 +93,25 @@ them alone.
 
 ## Supported Hardware
 
-- **SDRplay** (RSP1B, via the bundled `soapy_capture` SoapySDR helper)
-- **Airspy** (via `airspy_rx`)
-- **Any SoapySDR device** (via the same helper, `--driver` passthrough)
+- **SDRplay** (RSP1B, via the `sdrbindings` SoapySDR extension)
+- **Any SoapySDR device** (via the same extension, `--driver` passthrough)
 
 The library is hardware-agnostic: it consumes raw IQ samples from any source
 wide enough for the 6 MHz ATSC 3.0 channel.
 
 ### SDRplay driver
 
-The capture path shells out to `tools/soapy_capture`, a small C program that
-streams the RSP1B's native CS16 and writes interleaved int16 IQ by default
-(`--cs8` down-converts to the int8 layout).  `atsc3-decode` auto-detects the
-sample format.  Build it once with:
+The capture path uses `sdrbindings`, a separate CPython extension around the
+SoapySDR C API in `../sdrbindings`.  It streams the RSP1B's native CS16 and
+writes interleaved int16 IQ by default (`--cs8` down-converts to the int8
+layout).  `atsc3-decode` auto-detects the sample format.  Install it once:
 
 ```bash
-make
+make -C ../sdrbindings install
 ```
 
-If the binary is missing, `atsc3-capture` builds it on demand into
-`~/.cache/atsc3lib` (needs `cc` + SoapySDR headers).  The RSP1B's two gain
-elements are exposed as `--gain` (IFGR) and `--rf-gain` (RFGR); on RF33 the
-lighthouse decodes with `--gain 45 --rf-gain 3`.
+The RSP1B's two gain elements are exposed as `--gain` (IFGR) and `--rf-gain`
+(RFGR); on RF33 the lighthouse decodes with `--gain 45 --rf-gain 3`.
 
 ### HackRF Pro is not supported
 

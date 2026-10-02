@@ -1,20 +1,24 @@
-CC ?= cc
-CFLAGS ?= -O2 -Wall -Wextra
-PKG_CONFIG ?= pkg-config
+# atsc3lib build/test entry points.
+#
+# sdrbindings (the SDRplay capture extension) is a separate package and a
+# declared dependency, installed with the project rather than built here.
+#
+#   make            install atsc3lib (editable) and its dependencies
+#   make test       run the test suite
+#   make clean      remove build artefacts
 
-SOAPY_CFLAGS := $(shell $(PKG_CONFIG) --cflags SoapySDR 2>/dev/null)
-SOAPY_LIBS := $(shell $(PKG_CONFIG) --libs SoapySDR 2>/dev/null)
+PYTHON ?= python3
 
-TOOLS_BIN = tools/soapy_capture
+.PHONY: all install test clean
 
-.PHONY: all soapy_capture clean
+all: install
 
-all: soapy_capture
+install:
+	$(PYTHON) -m pip install -e .
 
-soapy_capture: $(TOOLS_BIN)
-
-$(TOOLS_BIN): tools/soapy_capture.c
-	$(CC) $(CFLAGS) -o $@ $< $(SOAPY_CFLAGS) $(SOAPY_LIBS)
+test:
+	$(PYTHON) -m pytest -q
 
 clean:
-	rm -f $(TOOLS_BIN)
+	rm -rf build dist *.egg-info atsc3lib/__pycache__ tests/__pycache__
+	find atsc3lib tests -name '*.pyc' -delete

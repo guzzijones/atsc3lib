@@ -1,13 +1,12 @@
 """Capture IQ samples using an SDR device.
 
 An ATSC 3.0 channel occupies 6 MHz, so the capture device must be wider than
-that before resampling.  The SDRplay RSP1B (via the bundled ``soapy_capture``
-helper) and the Airspy qualify; RTL-SDR does not (2.4 MHz) and is not
-supported.  The HackRF path was removed: the device no longer works on this
-setup, and the SDRplay delivers a wider dynamic range.
+that before resampling.  The SDRplay RSP1B (via the ``sdrbindings`` CPython
+extension around the SoapySDR C API) qualifies; RTL-SDR does not (2.4 MHz) and
+is not supported.  The HackRF and Airspy paths were removed: they are not
+available on this setup, and the SDRplay delivers a wider dynamic range.
 """
 
-import subprocess
 import argparse
 import shutil
 import sys
@@ -26,42 +25,13 @@ SDRPLAY_DRIVER = 'sdrplay'
 SDRPLAY_BANDWIDTH_HZ = 8_000_000
 
 
-def _soapy_capture_path() -> str:
-    """Locate the bundled ``soapy_capture`` helper binary.
-
-    Order: an existing build in the ``tools`` directory, then PATH.
-    """
-    candidate = Path(__file__).resolve().parent.parent / 'tools' / 'soapy_capture'
-    if candidate.is_file():
-        return str(candidate)
-    which = shutil.which('soapy_capture')
-    if which:
-        return which
-    return str(candidate)
-
-
-def _ensure_soapy_capture_built(binary: str) -> str:
-    """Build the helper if it is missing, using cc + pkg-config SoapySDR."""
-    binary_path = Path(binary)
-    if binary_path.is_file():
-        return str(binary_path)
-    cc = shutil.which('cc') or shutil.which('gcc')
-    if not cc:
-        raise RuntimeError(
-            "soapy_capture helper is not built and no C compiler was found")
-    src = Path(__file__).resolve().parent.parent / 'tools' / 'soapy_capture.c'
-    if not src.is_file():
-        raise RuntimeError(f"soapy_capture source not found at {src}")
-    pkg = subprocess.run(
-        ['pkg-config', '--cflags', '--libs', 'SoapySDR'],
-        capture_output=True, text=True)
-    flags = pkg.stdout.strip() if pkg.returncode == 0 else '-lSoapySDR'
-    cache_dir = Path.home() / '.cache' / 'atsc3lib'
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    out = cache_dir / 'soapy_capture'
-    cmd = [cc, '-O2', '-o', str(out), str(src)] + flags.split()
-    subprocess.run(cmd, check=True)
-    return str(out)
+def _bindings():
+    """Import and return the ``sdrbindings`` module, or None if unavailable."""
+    try:
+        import sdrbindings
+    except ImportError:
+        return None
+    return sdrbindings
 
 
 def capture(
@@ -76,110 +46,80 @@ def capture(
     cs8: bool = False,
 ):
     """
-    Capture IQ samples using available SDR hardware.
+    Capture IQ samples using the SDRplay.
 
     Args:
         freq_hz: Center frequency in Hz
         sample_rate: Sample rate in Hz
         output_file: Output file path
         duration_sec: Capture duration in seconds
-        gain_db: RX gain (device-dependent default if None)
-        device_type: Force specific device ('sdrplay', 'airspy')
-        device_index: Device index (for multiple devices)
-        rf_gain_db: RF gain for the SDRplay (RFGR element)
-        cs8: Write down-converted int8 IQ instead of native int16 (SDRplay)
+        gain_db: IF gain (IFGR); device default if None
+        device_type: Only 'sdrplay' is accepted
+        device_index: Device index (for multiple SDRplay units)
+        rf_gain_db: RF gain (RFGR)
+        cs8: Write int8 IQ instead of native int16
 
     Returns:
         str: Path to captured file
     """
-    available_tools = _detect_sdr_tools()
-
-    if not available_tools:
+    if not _detect_sdr_tools():
         raise RuntimeError(
-            "No SDR tools found. Install an SDRplay (SoapySDR) or Airspy."
+            "No SDRplay found. Install the SDRplay driver (SoapySDR) and "
+            "build/install the sdrbindings extension."
         )
 
-    if device_type and device_type in available_tools:
-        tool = device_type
-    else:
-        tool = list(available_tools.keys())[0]
+    if device_type and device_type != SDRPLAY_DRIVER:
+        raise RuntimeError(f"Unsupported device type: {device_type}")
 
-    if tool == 'sdrplay':
-        _capture_sdrplay(freq_hz, sample_rate, gain_db, duration_sec,
-                         output_file, device_index, rf_gain_db, cs8)
-    elif tool == 'airspy':
-        _capture_airspy(freq_hz, sample_rate, gain_db, duration_sec, output_file)
-    else:
-        raise RuntimeError(f"Unsupported device type: {tool}")
-
+    _capture_sdrplay(freq_hz, sample_rate, gain_db, duration_sec,
+                     output_file, device_index, rf_gain_db, cs8)
     return output_file
 
 
 def _detect_sdr_tools() -> dict:
-    """Detect available SDR command-line tools (sdrplay preferred)."""
+    """Detect the SDRplay front end (via sdrbindings or SoapySDRUtil)."""
     tools = {}
-
-    if shutil.which('SoapySDRUtil') or shutil.which('soapy_capture'):
-        tools['sdrplay'] = 'SDRplay (SoapySDR)'
-
-    if shutil.which('airspy_rx'):
-        tools['airspy'] = 'Airspy'
-
+    if _bindings() is not None or shutil.which('SoapySDRUtil'):
+        tools[SDRPLAY_DRIVER] = 'SDRplay (SoapySDR)'
     return tools
 
 
 def _capture_sdrplay(freq_hz, sample_rate, gain_db, duration_sec, output_file,
                      device_index=0, rf_gain_db=None, cs8=False):
-    """Capture using the SDRplay via the bundled SoapySDR helper."""
+    """Capture using the SDRplay through the ``sdrbindings`` extension."""
+    bindings = _bindings()
+    if bindings is None:
+        raise RuntimeError(
+            "sdrbindings is not installed; build it in ../sdrbindings "
+            "(make) and install with `pip install .`")
     ifgr = int(gain_db) if gain_db is not None else SDRPLAY_IFGR_DEFAULT
     rfgr = int(rf_gain_db) if rf_gain_db is not None else SDRPLAY_RFGR_DEFAULT
-    binary = _ensure_soapy_capture_built(_soapy_capture_path())
-    cmd = [
-        binary,
-        '--freq', str(int(freq_hz)),
-        '--rate', str(int(sample_rate)),
-        '--bw', str(SDRPLAY_BANDWIDTH_HZ),
-        '--ifgr', str(ifgr),
-        '--rfgr', str(rfgr),
-        '--duration', str(duration_sec),
-        '--out', output_file,
-        '--index', str(device_index),
-    ]
-    if cs8:
-        cmd.append('--cs8')
-    subprocess.run(cmd, check=True)
-
-
-def _capture_airspy(freq_hz, sample_rate, gain_db, duration_sec, output_file):
-    """Capture using Airspy."""
-    gain = int(gain_db) if gain_db else 10
-    cmd = [
-        "airspy_rx",
-        "-r", output_file,
-        "-f", str(freq_hz // 1_000_000),  # MHz
-        "-s", str(sample_rate),
-        "-g", str(gain),
-        "-n", str(sample_rate * duration_sec),
-    ]
-    subprocess.run(cmd, check=True)
+    bindings.capture_iq(
+        freq_hz,
+        output_file,
+        rate_hz=sample_rate,
+        bandwidth_hz=SDRPLAY_BANDWIDTH_HZ,
+        duration_sec=duration_sec,
+        ifgr=ifgr,
+        rfgr=rfgr,
+        driver=SDRPLAY_DRIVER,
+        index=device_index,
+        cs8=cs8,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Capture IQ samples from an SDR device",
+        description="Capture IQ samples from the SDRplay",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  atsc3-capture -f 587 -o out/capture.iq            # Auto-detect device
-  atsc3-capture -f 587 -t sdrplay -g 40 --rf-gain 4 # Force SDRplay + gains
-  atsc3-capture -f 605 --duration 30                # 30 second capture
+  atsc3-capture -f 587 -o out/capture.iq              # RSP1B with defaults
+  atsc3-capture -f 587 -g 45 --rf-gain 3              # tuned on RF33
+  atsc3-capture -f 605 --duration 30 --cs8            # int8 output
 
-Supported devices (auto-detected):
-  - SDRplay (SoapySDR; bundled soapy_capture helper)
-  - Airspy (airspy_rx)
-
-The device must be wider than the 6 MHz ATSC 3.0 channel; RTL-SDR (2.4 MHz)
-is not wide enough and is not supported.
+The SDRplay RSP1B is driven through sdrbindings (SoapySDR).  RTL-SDR
+(2.4 MHz) is too narrow for the 6 MHz ATSC 3.0 channel and is not supported.
         """
     )
 
@@ -190,17 +130,15 @@ is not wide enough and is not supported.
     parser.add_argument("-d", "--duration", type=int, default=10,
                         help="Duration in seconds")
     parser.add_argument("-g", "--gain", type=float, default=None,
-                        help="RX gain (IFGR for SDRplay; auto if not specified)")
+                        help="IF gain (IFGR); default if not specified")
     parser.add_argument("--rf-gain", type=float, default=None,
                         help="RF gain (RFGR) for the SDRplay")
-    parser.add_argument("-t", "--type", choices=['sdrplay', 'airspy'],
-                        help="Force device type (auto-detect if not specified)")
     parser.add_argument("-i", "--device-index", type=int, default=0,
-                        help="Device index (for multiple devices)")
+                        help="Device index (for multiple SDRplay units)")
     parser.add_argument("-s", "--sample-rate", type=int, default=None,
-                        help="Sample rate in Hz (device default if not specified)")
+                        help="Sample rate in Hz (default 10 MS/s)")
     parser.add_argument("--cs8", action="store_true",
-                        help="Write down-converted int8 IQ (SDRplay) instead of native int16")
+                        help="Write int8 IQ instead of native int16")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose output")
 
@@ -210,10 +148,7 @@ is not wide enough and is not supported.
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Default sample rates by device type
-    sample_rate = args.sample_rate
-    if sample_rate is None:
-        sample_rate = 10_000_000  # SDRplay/Airspy: 10 MS/s covers the channel
+    sample_rate = args.sample_rate if args.sample_rate else 10_000_000
 
     try:
         capture(
@@ -222,7 +157,6 @@ is not wide enough and is not supported.
             output_file=str(output),
             duration_sec=args.duration,
             gain_db=args.gain,
-            device_type=args.type,
             device_index=args.device_index,
             rf_gain_db=args.rf_gain,
             cs8=args.cs8,
