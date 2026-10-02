@@ -10,6 +10,7 @@ available on this setup, and the SDRplay delivers a wider dynamic range.
 import argparse
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 #: Default gain elements for the SDRplay RSP1B (A/322 8.1: the capture must
@@ -23,6 +24,15 @@ SDRPLAY_DRIVER = 'sdrplay'
 
 #: Baseband filter bandwidth for a 6 MHz ATSC 3.0 channel (A/322 Annex N).
 SDRPLAY_BANDWIDTH_HZ = 8_000_000
+
+
+@dataclass(frozen=True)
+class DetectedSdr:
+    """Which SDR front ends are usable on this host."""
+    sdrplay: bool
+
+    def __bool__(self) -> bool:
+        return self.sdrplay
 
 
 def _bindings():
@@ -76,12 +86,10 @@ def capture(
     return output_file
 
 
-def _detect_sdr_tools() -> dict:
+def _detect_sdr_tools() -> DetectedSdr:
     """Detect the SDRplay front end (via sdrbindings or SoapySDRUtil)."""
-    tools = {}
-    if _bindings() is not None or shutil.which('SoapySDRUtil'):
-        tools[SDRPLAY_DRIVER] = 'SDRplay (SoapySDR)'
-    return tools
+    available = (_bindings() is not None) or bool(shutil.which('SoapySDRUtil'))
+    return DetectedSdr(sdrplay=available)
 
 
 def _capture_sdrplay(freq_hz, sample_rate, gain_db, duration_sec, output_file,

@@ -20,6 +20,7 @@ The cell geometry follows A/322:
 Reference: ATSC A/322:2024-04, Sections 6.2, 6.3, 7.2.6, 8.1.
 """
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -41,6 +42,7 @@ from .cell_interleaver import CellInterleaver
 from . import baseband
 from . import alp
 from . import ip as ip_layer
+from . import slt as slt_mod
 from . import twisted_block
 
 
@@ -1059,6 +1061,7 @@ class DecodedStreams:
         packets: the de-encapsulated ALP packets (A/330 5.1).
         datagrams: UDP datagrams after IPv4 reassembly (RFC 791/768).
         lls: Low-Level Signaling tables (A/331 6.1), keyed by table_id.
+        slt: the parsed Service List Table, when an SLT LLS table is present.
         alp_stats: ALP walk bookkeeping (resyncs etc.), never hidden.
         ip_stats: IPv4 reassembly bookkeeping.
     """
@@ -1067,6 +1070,7 @@ class DecodedStreams:
     lls: list
     alp_stats: alp.AlpStats
     ip_stats: ip_layer.IpStats
+    slt: object = None
 
 
 def decode_streams(payload: PlpPayload) -> DecodedStreams:
@@ -1089,5 +1093,13 @@ def decode_streams(payload: PlpPayload) -> DecodedStreams:
     lls = [ip_layer.parse_lls(d.payload) for d in datagrams
            if ip_layer.is_lls(d)]
     lls = [t for t in lls if t is not None]
+    slt = None
+    for table in lls:
+        if table.table_id == ip_layer.LLS_SLT:
+            try:
+                slt = slt_mod.slt_from_lls(table.data)
+            except (OSError, ValueError, ET.ParseError):
+                slt = None
+            break
     return DecodedStreams(packets=alp_packets, datagrams=datagrams, lls=lls,
-                          alp_stats=alp_stats, ip_stats=reasm.stats)
+                          alp_stats=alp_stats, ip_stats=reasm.stats, slt=slt)

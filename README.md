@@ -19,6 +19,9 @@ Implements, from the A/322 specification:
 - **Link/network layer**: A/322 5.2.2 Baseband Packet headers, A/330 ALP
   de-encapsulation (single / segmentation / concatenation / signalling),
   IPv4 fragment reassembly and UDP, A/331 Low-Level Signaling
+- **Service discovery / delivery**: A/331 SLT parsing (gzip + XML) with the
+  ROUTE/MMTP SLS bootstrap, and ROUTE/ALC (RFC 5651 LCT) packet parsing with
+  delivery-object reassembly and Extended FDT parsing
 
 Validated against real off-air captures and an independent receiver.
 

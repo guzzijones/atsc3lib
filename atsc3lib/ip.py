@@ -106,12 +106,19 @@ class IpReassembler:
 LLS_IP = b"\xe0\x00\x17\x3c"        # 224.0.23.60
 LLS_PORT = 4937
 
+#: LLS_table_id for the SLT (A/331 Table 6.1).
+LLS_SLT = 0x01
+
 #: LLS table_id -> name (A/331 Table 6.1).
 LLS_TABLE_NAME = {
     0x01: "SLT", 0x02: "RRT", 0x03: "SystemTime", 0x04: "AEAT",
     0x05: "OnscreenMessageNotification", 0x06: "CertificationData",
     0x07: "SignedMultiTable",
 }
+
+#: LLS_table() fixed header (A/331 Table 6.1): table_id, group_id,
+#: group_count_minus1, table_version.
+LLS_HEADER_BYTES = 4
 
 
 def is_lls(datagram: UdpDatagram) -> bool:
@@ -121,17 +128,27 @@ def is_lls(datagram: UdpDatagram) -> bool:
 
 @dataclass(frozen=True)
 class LlsTable:
-    """A Low-Level Signaling table (A/331 6.1)."""
+    """A Low-Level Signaling table (A/331 6.1, Table 6.1)."""
     table_id: int
     name: str
     data: bytes
+    group_id: int = 0
+    group_count_minus1: int = 0
+    table_version: int = 0
 
 
 def parse_lls(payload: bytes) -> Optional[LlsTable]:
-    """Parse an LLS table's 4-byte header (A/331 6.1)."""
-    if len(payload) < 4:
+    """Parse an LLS_table() header (A/331 Table 6.1).
+
+    The body ``data`` begins after the 4-byte header; for table_id 0x01 it is
+    the gzip-compressed SLT XML (A/331 6.3).
+    """
+    if len(payload) < LLS_HEADER_BYTES:
         return None
-    table_id = payload[0]
+    table_id, group_id, group_count_minus1, table_version = payload[:4]
     return LlsTable(table_id=table_id,
                     name=LLS_TABLE_NAME.get(table_id, f"0x{table_id:02x}"),
-                    data=payload[4:])
+                    data=payload[LLS_HEADER_BYTES:],
+                    group_id=group_id,
+                    group_count_minus1=group_count_minus1,
+                    table_version=table_version)

@@ -269,3 +269,36 @@ class TestDecodeStreams:
         assert len(streams.lls) == 1
         assert streams.lls[0].name == 'SLT'
         assert streams.lls[0].data == b'SLTbody'
+        # 'SLTbody' is not valid SLT XML, so no parsed SLT is attached.
+        assert streams.slt is None
+
+    def test_bbp_to_parsed_slt(self):
+        import gzip
+        from pathlib import Path
+
+        from atsc3lib.payload import PlpPayload, decode_streams
+
+        def ipv4_udp(payload):
+            udp = (1234).to_bytes(2, 'big') + (4937).to_bytes(2, 'big') \
+                + (8 + len(payload)).to_bytes(2, 'big') + b'\x00\x00' + payload
+            total = 20 + len(udp)
+            return (bytes([0x45, 0, total >> 8, total & 0xFF, 0, 0, 0x40, 0,
+                           64, 17, 0, 0, 0x0A, 0, 0, 1])
+                    + bytearray(b'\xe0\x00\x17\x3c') + udp)
+
+        slt_body = gzip.compress(b'<SLT bsid="540"><Service serviceId="1"/></SLT>')
+        lls_payload = b'\x01\x00\x00\x01' + slt_body
+        alppkt = _alp_single(alp.PT_IPV4, ipv4_udp(lls_payload), sid=3)
+        bbp = bytes([0x00]) + alppkt
+
+        class _Block:
+            ok = True
+
+            def __init__(self, packet):
+                self.packet = packet
+
+        payload = PlpPayload(plp_id=16, fec_blocks=[_Block(bbp)], n_fec=1)
+        streams = decode_streams(payload)
+        assert streams.slt is not None
+        assert streams.slt.bsid == (540,)
+        assert streams.slt.services[0].service_id == 1

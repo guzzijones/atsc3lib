@@ -56,6 +56,8 @@ from . import cell_interleaver
 from . import baseband
 from . import alp
 from . import ip
+from . import slt
+from . import route
 from . import signaling_fec
 
 # Signalling
@@ -138,6 +140,8 @@ __all__ = [
     "baseband",
     "alp",
     "ip",
+    "slt",
+    "route",
     # signalling
     "L1SignalingParser",
     "parse_l1_basic",

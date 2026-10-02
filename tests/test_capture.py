@@ -15,15 +15,12 @@ class TestCapture:
     """Test capture functionality."""
 
     def test_detect_sdr_tools(self):
-        """Test SDR tool detection."""
-        from atsc3lib.capture import _detect_sdr_tools
+        """Test SDR detection returns a DetectedSdr record."""
+        from atsc3lib.capture import _detect_sdr_tools, DetectedSdr
 
-        tools = _detect_sdr_tools()
-
-        # Should return dict; only the SDRplay is supported now.
-        assert isinstance(tools, dict)
-        for tool_name in tools:
-            assert tool_name == 'sdrplay'
+        detected = _detect_sdr_tools()
+        assert isinstance(detected, DetectedSdr)
+        assert isinstance(detected.sdrplay, bool)
 
     def test_detect_sdrplay_via_bindings(self, monkeypatch):
         """The SDRplay is detected through the sdrbindings extension."""
@@ -33,7 +30,7 @@ class TestCapture:
         monkeypatch.setattr(capture_module, '_bindings',
                             lambda: _FakeBindings())
         monkeypatch.setattr('shutil.which', lambda name: None)
-        assert 'sdrplay' in capture_module._detect_sdr_tools()
+        assert capture_module._detect_sdr_tools().sdrplay
 
     def test_capture_sdrplay_function(self):
         """Test SDRplay capture function exists."""
@@ -63,6 +60,12 @@ class TestCapture:
         assert calls['bandwidth_hz'] == capture_module.SDRPLAY_BANDWIDTH_HZ
         assert calls['driver'] == capture_module.SDRPLAY_DRIVER
 
+    def test_detected_sdr_bool(self):
+        """DetectedSdr truthiness tracks SDRplay availability."""
+        from atsc3lib.capture import DetectedSdr
+        assert DetectedSdr(sdrplay=True)
+        assert not DetectedSdr(sdrplay=False)
+
     def test_capture_sdrplay_without_bindings(self, monkeypatch):
         """A clear error is raised when sdrbindings is unavailable."""
         monkeypatch.setattr(capture_module, '_bindings', lambda: None)
@@ -73,7 +76,7 @@ class TestCapture:
     def test_capture_rejects_unknown_device(self, monkeypatch):
         """Only 'sdrplay' is accepted as a device type."""
         monkeypatch.setattr(capture_module, '_detect_sdr_tools',
-                            lambda: {'sdrplay': 'SDRplay'})
+                            lambda: capture_module.DetectedSdr(sdrplay=True))
         with pytest.raises(RuntimeError):
             capture_module.capture(587_000_000, 10_000_000, '/tmp/x.iq',
                                    duration_sec=1, device_type='airspy')
